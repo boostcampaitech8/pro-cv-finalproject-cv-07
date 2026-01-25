@@ -83,6 +83,18 @@ def main(cfg: TrainConfig):
         true_close, pred_close = convert_close(data, test_dates, final_true, final_pred, cfg.horizons)
         save_close_plot(test_dates, true_close, pred_close, cfg.horizons, os.path.join(cfg.output_dir, f"{name}"), "close_plot.png") 
         
+        # csv로 저장
+        pred_close = np.array(pred_close).T
+        close_columns = [f"close_{h}" for h in cfg.horizons]
+
+        close_df = pd.DataFrame(pred_close, columns=close_columns)
+        close_df.insert(0, "time", test_dates[:len(pred_close)])
+
+        output_csv_path = os.path.join(cfg.output_dir, f"{name}", "predictions.csv")
+        close_df.to_csv(output_csv_path, index=False)
+
+        print(f"{output_csv_path} 저장 완료")
+        
 
 if __name__ == "__main__":
     cfg = tyro.cli(TrainConfig)
