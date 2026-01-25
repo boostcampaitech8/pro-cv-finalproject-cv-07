@@ -1,1 +1,4 @@
 python/src/datasets/
+*outputs/
+
+__pycache__/
