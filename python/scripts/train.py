@@ -1,51 +1,59 @@
-from src.data.dataset import *
+from src.configs.train_config import TrainConfig
+from src.utils.set_seed import set_seed
+from src.data.dataset import build_dataset, train_valid_split
 from src.data.preprocessing import scale_train_data
 from src.models.LSTM import LSTM
 from src.engine.trainer import train
 from src.utils.visualization import save_loss_curve
 
 import os
+import tyro
 import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 
-# 파라미터 설정
-seq_length = 20
-batch_size = 64
-hidden_dim = 50
-learning_rate = 0.001
-num_layers = 2
-num_epochs = 300
+def main(cfg: TrainConfig):
+    set_seed(cfg.seed)
+    
+    os.makedirs(cfg.checkpoint_dir, exist_ok=True)
 
-for name in ["corn", "wheat", "soybean"]:
-    if os.path.exists(f"./src/datasets/preprocessing/{name}_feature_engineering.csv"):
-        data = pd.read_csv(f"./src/datasets/preprocessing/{name}_feature_engineering.csv")
-        dataX, dataY, dataT = build_dataset(data, seq_length)
-        trainX, trainY, validX, validY = train_valid_split(dataX, dataY, dataT, "./src/datasets/rolling_fold.json", index=7)
+    for name in ["corn", "wheat", "soybean"]:
+        data_path = os.path.join(cfg.data_dir, f"preprocessing/{name}_feature_engineering.csv")
+        
+        if not os.path.exists(data_path):
+            print(f"{data_path} 파일 존재하지 않음 \n preprocessing.py 실행 필요")
+            return
+        
+        data = pd.read_csv(data_path)
+        dataX, dataY, dataT = build_dataset(data, cfg.seq_length)
+        trainX, trainY, validX, validY = train_valid_split(dataX, dataY, dataT, os.path.join(cfg.data_dir, "rolling_fold.json"), index=cfg.fold)
         scaler_x, scaler_y, trainX, trainY, validX, validY = scale_train_data(trainX, trainY, validX, validY)
     
         train_dataset = TensorDataset(trainX, trainY)
         valid_dataset = TensorDataset(validX, validY)
 
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+        train_dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
+        valid_dataloader = DataLoader(valid_dataset, batch_size=cfg.batch_size, shuffle=False)
     
         input_dim = trainX.shape[-1]
         output_dim = trainY.shape[-1]
         
-        model = LSTM(input_dim, hidden_dim, output_dim, num_layers)
+        model = LSTM(input_dim, cfg.hidden_dim, output_dim, cfg.num_layers)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
         criterion = nn.MSELoss()
         
-        model, train_hist, valid_hist = train(model, train_dataloader, valid_dataloader, criterion, optimizer, num_epochs)
+        model, train_hist, valid_hist = train(model, train_dataloader, valid_dataloader, criterion, optimizer, cfg.epochs)
         
-        checkpoint = {"model_state_dict": model.state_dict(), "scaler_x": scaler_x, "scaler_y": scaler_y,}
-        torch.save(checkpoint, f'./src/outputs/{name}_best_model.pt')
-        
-        save_loss_curve(train_hist, valid_hist, './src/outputs/', filename=f"{name}_loss_curve.png")
-        
-    else:
-        print("preprocessing.py 실행 필요")
+        checkpoint = {"model_state_dict": model.state_dict(), "scaler_x": scaler_x, "scaler_y": scaler_y}
+        torch.save(checkpoint, os.path.join(cfg.checkpoint_dir, f"{name}_{cfg.seq_length}window_best.pt"))
+
+        os.makedirs(os.path.join(cfg.output_dir, f"{name}"), exist_ok=True)
+        save_loss_curve(train_hist, valid_hist, os.path.join(cfg.output_dir, f"{name}"), "loss_curve.png")
+            
+
+if __name__ == "__main__":
+    cfg = tyro.cli(TrainConfig)
+    main(cfg)
