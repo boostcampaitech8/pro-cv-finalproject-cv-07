@@ -15,7 +15,7 @@ class TrainConfig:
     
     batch_size: int = 64
     seq_length: int = 20
-    fold: int = 7
+    fold: List[int] = field(default_factory=lambda: [7])
     horizons: List[int] = field(default_factory=lambda: [1, 5, 10, 20])
     
     hidden_dim: int = 32
@@ -28,3 +28,4 @@ class TrainConfig:
     output_dir: str = "./src/outputs"
 
     seed: int = 42
+    ensemble: bool = False

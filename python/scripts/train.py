@@ -28,30 +28,32 @@ def main(cfg: TrainConfig):
         
         data = pd.read_csv(data_path)
         dataX, dataY, dataT = build_dataset(data, cfg.seq_length, cfg.horizons)
-        trainX, trainY, validX, validY = train_valid_split(dataX, dataY, dataT, os.path.join(cfg.data_dir, "rolling_fold.json"), index=cfg.fold)
-        scaler_x, scaler_y, trainX, trainY, validX, validY = scale_train_data(trainX, trainY, validX, validY)
+        
+        for fold in cfg.fold:
+            trainX, trainY, validX, validY = train_valid_split(dataX, dataY, dataT, os.path.join(cfg.data_dir, "rolling_fold.json"), index=fold)
+            scaler_x, scaler_y, trainX, trainY, validX, validY = scale_train_data(trainX, trainY, validX, validY)
     
-        train_dataset = TensorDataset(trainX, trainY)
-        valid_dataset = TensorDataset(validX, validY)
+            train_dataset = TensorDataset(trainX, trainY)
+            valid_dataset = TensorDataset(validX, validY)
         
-        train_dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
-        valid_dataloader = DataLoader(valid_dataset, batch_size=cfg.batch_size, shuffle=False)
+            train_dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
+            valid_dataloader = DataLoader(valid_dataset, batch_size=cfg.batch_size, shuffle=False)
     
-        input_dim = trainX.shape[-1]
-        output_dim = trainY.shape[-1]
+            input_dim = trainX.shape[-1]
+            output_dim = trainY.shape[-1]
         
-        model = LSTM(input_dim, cfg.hidden_dim, output_dim, cfg.num_layers)
+            model = LSTM(input_dim, cfg.hidden_dim, output_dim, cfg.num_layers)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-        criterion = nn.MSELoss()
+            optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+            criterion = nn.MSELoss()
         
-        model, train_hist, valid_hist = train(model, train_dataloader, valid_dataloader, criterion, optimizer, cfg.epochs)
+            model, train_hist, valid_hist = train(model, train_dataloader, valid_dataloader, criterion, optimizer, cfg.epochs)
         
-        checkpoint = {"model_state_dict": model.state_dict(), "scaler_x": scaler_x, "scaler_y": scaler_y}
-        torch.save(checkpoint, os.path.join(cfg.checkpoint_dir, f"{name}_{cfg.seq_length}window_best.pt"))
+            checkpoint = {"model_state_dict": model.state_dict(), "scaler_x": scaler_x, "scaler_y": scaler_y}
+            torch.save(checkpoint, os.path.join(cfg.checkpoint_dir, f"{name}_{cfg.seq_length}window_{fold}flod_best.pt"))
 
-        os.makedirs(os.path.join(cfg.output_dir, f"{name}"), exist_ok=True)
-        save_loss_curve(train_hist, valid_hist, os.path.join(cfg.output_dir, f"{name}"), "loss_curve.png")
+            os.makedirs(os.path.join(cfg.output_dir, f"{name}"), exist_ok=True)
+            save_loss_curve(train_hist, valid_hist, os.path.join(cfg.output_dir, f"{name}"), f"{cfg.seq_length}window_{fold}flod_loss_curve.png")
             
 
 if __name__ == "__main__":
