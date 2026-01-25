@@ -18,3 +18,35 @@ def build_dataset(time_series, seq_length):
     return np.array(dataX), np.array(dataY), np.array(dataT)
 
 
+def train_valid_split(X, Y, T, split_file, index):
+    with open(split_file, 'r') as file:
+        data = json.load(file)
+    
+    train_dates = data['folds'][index]['train']['t_dates']
+    valid_dates =  data['folds'][index]['val']['t_dates']
+    
+    T = np.array([str(t)[:10] for t in T])
+
+    train_dates = [str(d)[:10] for d in train_dates]
+    valid_dates = [str(d)[:10] for d in valid_dates]
+    test_dates  = [str(d)[:10] for d in test_dates]
+
+    trainX, trainY = X[np.isin(T, train_dates)], Y[np.isin(T, train_dates)]
+    validX, validY = X[np.isin(T, valid_dates)], Y[np.isin(T, valid_dates)]
+    testX, testY = X[np.isin(T, test_dates)], Y[np.isin(T, test_dates)]
+    
+    return trainX, trainY, validX, validY, testX, testY
+
+
+def test_split(X, Y, T, split_file):
+    with open(split_file, 'r') as file:
+        data = json.load(file)
+
+    test_dates = data['meta']['fixed_test']['t_dates']
+    
+    T = np.array([str(t)[:10] for t in T])
+    test_dates  = [str(d)[:10] for d in test_dates]
+    
+    testX, testY = X[np.isin(T, test_dates)], Y[np.isin(T, test_dates)]
+    
+    return test_dates, testX, testY
