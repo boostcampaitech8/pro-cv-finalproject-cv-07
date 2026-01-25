@@ -29,13 +29,11 @@ def train_valid_split(X, Y, T, split_file, index):
 
     train_dates = [str(d)[:10] for d in train_dates]
     valid_dates = [str(d)[:10] for d in valid_dates]
-    test_dates  = [str(d)[:10] for d in test_dates]
 
     trainX, trainY = X[np.isin(T, train_dates)], Y[np.isin(T, train_dates)]
     validX, validY = X[np.isin(T, valid_dates)], Y[np.isin(T, valid_dates)]
-    testX, testY = X[np.isin(T, test_dates)], Y[np.isin(T, test_dates)]
     
-    return trainX, trainY, validX, validY, testX, testY
+    return trainX, trainY, validX, validY
 
 
 def test_split(X, Y, T, split_file):
