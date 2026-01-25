@@ -14,6 +14,9 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 def main(cfg: TrainConfig):
@@ -32,7 +35,7 @@ def main(cfg: TrainConfig):
             return 
     
         data = pd.read_csv(data_path)
-        dataX, dataY, dataT = build_dataset(data, cfg.seq_length)
+        dataX, dataY, dataT = build_dataset(data, cfg.seq_length, cfg.horizons)
         test_dates, testX, testY = test_split(dataX, dataY, dataT, os.path.join(cfg.data_dir, "rolling_fold.json"))
         
         checkpoint = torch.load(checkpoint_path, weights_only=False)
@@ -53,15 +56,22 @@ def main(cfg: TrainConfig):
         
         preds, trues = test(model, test_dataloader)
         
-        pred_inverse = scaler_y.inverse_transform(np.array(preds))
-        testY_inverse = scaler_y.inverse_transform(np.array(trues))
+        print(preds.shape)
+        print(trues.shape)
         
-        compute_regression_metrics(testY_inverse, pred_inverse)
+        if output_dim == 1:
+            pred_inverse = scaler_y.inverse_transform(np.array(preds))
+            testY_inverse = scaler_y.inverse_transform(np.array(trues))
+        else:
+            pred_inverse = scaler_y.inverse_transform(np.array(preds).reshape(-1, len(preds[0])))
+            testY_inverse = scaler_y.inverse_transform(np.array(trues).reshape(-1, len(trues[0])))
         
-        save_log_return_plot(testY_inverse, pred_inverse, os.path.join(cfg.output_dir, f"{name}"), "log_return_plot.png")
+        compute_regression_metrics(testY_inverse, pred_inverse, cfg.horizons)
         
-        true_close, pred_close = convert_close(data, test_dates, testY_inverse, pred_inverse)
-        save_close_plot(test_dates, true_close, pred_close, os.path.join(cfg.output_dir, f"{name}"), "close_plot.png") 
+        save_log_return_plot(testY_inverse, pred_inverse, cfg.horizons, os.path.join(cfg.output_dir, f"{name}"), "log_return_plot.png")
+        
+        true_close, pred_close = convert_close(data, test_dates, testY_inverse, pred_inverse, cfg.horizons)
+        save_close_plot(test_dates, true_close, pred_close, cfg.horizons, os.path.join(cfg.output_dir, f"{name}"), "close_plot.png") 
         
 
 if __name__ == "__main__":
