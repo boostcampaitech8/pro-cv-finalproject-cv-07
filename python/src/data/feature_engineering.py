@@ -2,10 +2,11 @@ import numpy as np
 import pandas as pd
 
 
-def add_log_return_feature(df):
+def add_log_return_feature(df, horizons):
     df = df.copy()
     
-    df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+    for h in horizons:
+        df[f'log_return_{h}'] = np.log(df['close'].shift(-(h-1)) / df['close'].shift(1))
     
     return df
 
@@ -23,7 +24,7 @@ def add_volatility_features(df, windows=[7, 14, 21]):
     df = df.copy()
     
     for window in windows:
-        df[f'vol_return_{window}d'] = df['log_return'].rolling(window=window).std()
+        df[f'vol_return_{window}d'] = df['log_return_1'].rolling(window=window).std()
         df[f'vol_volume_{window}d'] = df['Volume'].rolling(window=window).std()
     
     return df

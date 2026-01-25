@@ -34,7 +34,7 @@ def main(cfg: TrainConfig):
 
     for name in ["corn", "wheat", "soybean"]:
         data = pd.read_csv(os.path.join(cfg.data_dir, f"{name}_future_price.csv"))
-        data = add_log_return_feature(data)
+        data = add_log_return_feature(data, cfg.horizons)
         data = add_ema_features(data, cfg.ema_spans) if cfg.use_ema_features else data
         data = add_volatility_features(data, cfg.volatility_windows) if cfg.use_volatility_features else data
         data = add_news_count_feature(data, news_df) if cfg.use_news_count_features else data

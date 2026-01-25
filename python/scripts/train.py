@@ -27,13 +27,13 @@ def main(cfg: TrainConfig):
             return
         
         data = pd.read_csv(data_path)
-        dataX, dataY, dataT = build_dataset(data, cfg.seq_length)
+        dataX, dataY, dataT = build_dataset(data, cfg.seq_length, cfg.horizons)
         trainX, trainY, validX, validY = train_valid_split(dataX, dataY, dataT, os.path.join(cfg.data_dir, "rolling_fold.json"), index=cfg.fold)
         scaler_x, scaler_y, trainX, trainY, validX, validY = scale_train_data(trainX, trainY, validX, validY)
     
         train_dataset = TensorDataset(trainX, trainY)
         valid_dataset = TensorDataset(validX, validY)
-
+        
         train_dataloader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
         valid_dataloader = DataLoader(valid_dataset, batch_size=cfg.batch_size, shuffle=False)
     

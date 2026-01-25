@@ -87,11 +87,15 @@ def scale_train_data(trainX, trainY, validX, validY):
     validX = scaler_x.transform(validX.reshape(-1, n_features)).reshape(-1, seq_len, n_features)
 
     # Output scale
+    if len(trainY.shape) != 2:
+        trainY = trainY.reshape(-1, 1)
+        validY = validY.reshape(-1, 1)
+    
     scaler_y = MaxAbsScaler()
-    scaler_y.fit(trainY.reshape(-1, 1))
+    scaler_y.fit(trainY)
 
-    trainY = scaler_y.transform(trainY.reshape(-1, 1))
-    validY = scaler_y.transform(validY.reshape(-1, 1))
+    trainY = scaler_y.transform(trainY)
+    validY = scaler_y.transform(validY)
     
     # tensor화
     trainX = torch.FloatTensor(trainX)
@@ -105,9 +109,12 @@ def scale_train_data(trainX, trainY, validX, validY):
 
 def scale_test_data(scaler_x, scaler_y, testX, testY):
     samples, seq_len, n_features = testX.shape
+    
+    if len(testY.shape) != 2:
+        testY = testY.reshape(-1, 1)
 
     testX = scaler_x.transform(testX.reshape(-1, n_features)).reshape(-1, seq_len, n_features)
-    testY = scaler_y.transform(testY.reshape(-1, 1))
+    testY = scaler_y.transform(testY)
     
     # tensor화
     testX = torch.FloatTensor(testX)

@@ -16,6 +16,7 @@ class TrainConfig:
     batch_size: int = 64
     seq_length: int = 20
     fold: int = 7
+    horizons: List[int] = field(default_factory=lambda: [1, 5, 10, 20])
     
     hidden_dim: int = 32
     num_layers: int = 2
