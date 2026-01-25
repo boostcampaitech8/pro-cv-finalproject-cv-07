@@ -28,3 +28,36 @@ def save_loss_curve(train_hist, valid_hist, save_dir, filename="loss_curve.png")
     print(f"📈 Loss curve saved to: {save_path}")
     
     
+def save_log_return_plot(y_true, y_pred, save_dir, filename="log-_return_plot.png"):
+    plt.figure(figsize=(8,3))
+    plt.plot(np.arange(len(y_true)), y_true, label="true")
+    plt.plot(np.arange(len(y_pred)), y_pred, label="pred")
+    plt.title("Log-Return plot")
+    plt.legend()
+    plt.tight_layout()
+
+    save_path = os.path.join(save_dir, filename)
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    
+    print(f"📈 Log Return plot saved to: {save_path}")
+    
+    
+def save_close_plot(dates, actual_close, pred_close, save_dir, filename="close_plot.png"):
+    plt.figure(figsize=(14, 6))
+    plt.plot(dates, actual_close, label="Actual Close")
+    plt.plot(dates, pred_close, label="Predicted Close", alpha=0.8)
+
+    plt.xlabel("Date")
+    plt.ylabel("Close Price")
+    plt.title("Actual vs Predicted Close Price")
+    plt.xticks(rotation=45)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    save_path = os.path.join(save_dir, filename)
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    
+    print(f"📈 Close plot saved to: {save_path}")
