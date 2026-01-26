@@ -37,10 +37,9 @@ def add_news_count_feature(df, news_df):
     news_df['publish_date'] = pd.to_datetime(news_df['publish_date']).dt.date
     df['time'] = pd.to_datetime(df['time']).dt.date
     
-    # 휴장일 기사 -> 다음 거래일로 매핑
     trade_days = df['time'].sort_values().unique()
     news_df['trade_date'] = news_df['publish_date'].apply(
-        lambda d: trade_days[trade_days >= d][0] if np.any(trade_days >= d) else pd.NaT
+        lambda d: trade_days[trade_days <= d][-1] if np.any(trade_days <= d) else pd.NaT
     )
     
     daily_news_count = news_df.groupby('trade_date').size().reset_index(name='news_count')
@@ -61,7 +60,7 @@ def add_news_imformation_features(df, news_df):
 
     trade_days = df['time'].sort_values().unique()
     news_df['trade_date'] = news_df['publish_date'].apply(
-        lambda d: trade_days[trade_days >= d][0] if np.any(trade_days >= d) else pd.NaT
+        lambda d: trade_days[trade_days <= d][-1] if np.any(trade_days <= d) else pd.NaT
     )
     
     sentiment_counts = news_df.groupby('trade_date')['sentiment_label'].value_counts(normalize=True).unstack(fill_value=0)
