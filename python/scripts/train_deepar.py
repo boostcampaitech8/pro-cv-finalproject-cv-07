@@ -1,4 +1,4 @@
-#export PYTHONPATH=/data/ephemeral/home/wooqi00/pro-cv-finalproject-cv-07/python
+#export PYTHONPATH=/data/ephemeral/home/pro-cv-finalproject-cv-07/python
 from src.configs.train_config import TrainConfig
 from src.utils.set_seed import set_seed
 from src.data.dataset import build_dataset, train_valid_split
@@ -225,7 +225,17 @@ def plot_loss_from_logger(logger, save_path=None):
     if save_path:
         plt.savefig(save_path)
     plt.show()
-    
+
+def lag_features_by_1day(df: pd.DataFrame, feature_cols, group_col="item_id", time_col="time"):
+    df = df.sort_values([group_col, time_col]).copy()
+
+    # feature_cols만 1일 lag (누수 방지)
+    df[feature_cols] = df.groupby(group_col)[feature_cols].shift(1)
+
+    # lag로 생긴 NaN 제거(첫 날)
+    df = df.dropna(subset=feature_cols).reset_index(drop=True)
+    return df
+
     
 def main(cfg: TrainConfig):
     set_seed(cfg.seed)
@@ -243,10 +253,13 @@ def main(cfg: TrainConfig):
     # feature_cols만 추출할 때 long_df 활용 가능
     feature_cols = [
         c for c in pd.concat(dfs.values(), ignore_index=True).columns
-        if c not in ["time", "item_id"] and not c.startswith("log_return_")
+        if c not in ["time", "item_id","close"] and not c.startswith("log_return_")
     ]
+    for name in list(dfs.keys()):
+        dfs[name] = lag_features_by_1day(dfs[name], feature_cols, group_col="item_id", time_col="time")
+
     cfg.epochs=30
-    cfg.fold=[0]
+    cfg.fold=[0,1,2,3,4,5,6,7]
     for fold in cfg.fold:
         train_dfs= {}
         val_dfs = {}
