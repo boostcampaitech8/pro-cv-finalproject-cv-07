@@ -85,24 +85,61 @@ def deepar_split(df, split_file, fold_idx):
 
 
 
+# def build_multi_item_dataset(dfs, target_col, feature_cols):
+#     all_dfs = []
+#     min_len = min(len(df) for df in dfs.values())
+#     for item_id, df in dfs.items():
+#         df = df.copy()
+#         #df = df.iloc[-min_len:]
+
+#         # 필수 컬럼 체크
+#         assert "item_id" in df.columns, f"{item_id}: item_id missing"
+#         assert target_col in df.columns, f"{item_id}: target missing"
+
+    
+#         # 필요한 컬럼만 선택
+#         keep_cols = ["time", "item_id", target_col] + feature_cols
+#         df = df[keep_cols]
+
+#         all_dfs.append(df)
+#         print(f"Item: {item_id}, Target: {len(df.values)}")
+
+#     # multi-item concat
+#     long_df = pd.concat(all_dfs, ignore_index=True)
+
+#     # PandasDataset 생성
+#     dataset = PandasDataset.from_long_dataframe(
+#         long_df,
+#         item_id="item_id",
+#         timestamp="time",
+#         target=target_col,
+#         freq=None,   # ← 숫자 index일 때는 None이 안전
+#         feat_dynamic_real=feature_cols,
+#     )
+    
+
+#     return dataset
+
+
 def build_multi_item_dataset(dfs, target_col, feature_cols):
     all_dfs = []
     min_len = min(len(df) for df in dfs.values())
     for item_id, df in dfs.items():
         df = df.copy()
-        #df = df.iloc[-min_len:]
 
         # 필수 컬럼 체크
         assert "item_id" in df.columns, f"{item_id}: item_id missing"
         assert target_col in df.columns, f"{item_id}: target missing"
 
-    
+        # 존재하는 feature만 선택
+        existing_features = [c for c in feature_cols if c in df.columns]
+
         # 필요한 컬럼만 선택
-        keep_cols = ["time", "item_id", target_col] + feature_cols
+        keep_cols = ["time", "item_id", target_col] + existing_features
         df = df[keep_cols]
 
         all_dfs.append(df)
-        print(f"Item: {item_id}, Target: {len(df.values)}")
+        print(f"Item: {item_id}, Target: {len(df.values)}, Features used: {len(existing_features)}")
 
     # multi-item concat
     long_df = pd.concat(all_dfs, ignore_index=True)
@@ -113,9 +150,8 @@ def build_multi_item_dataset(dfs, target_col, feature_cols):
         item_id="item_id",
         timestamp="time",
         target=target_col,
-        freq=None,   # ← 숫자 index일 때는 None이 안전
-        feat_dynamic_real=feature_cols,
+        freq=None,   # 숫자 index일 때는 None이 안전
+        feat_dynamic_real=existing_features,
     )
-    
 
     return dataset

@@ -1,12 +1,14 @@
-#export PYTHONPATH=/data/ephemeral/home/wooqi00/pro-cv-finalproject-cv-07/python
+
+    #export PYTHONPATH=/data/ephemeral/home/pro-cv-finalproject-cv-07/python
+import os
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 from src.configs.train_config import TrainConfig
 from src.utils.set_seed import set_seed
 from src.data.dataset import build_dataset, train_valid_split
-from src.data.preprocessing import scale_train_data
-from src.models.LSTM import LSTM
 from src.engine.trainer import train
 from src.utils.visualization import save_loss_curve
-
+from collections import defaultdict
 import os
 import tyro
 import pandas as pd
@@ -25,6 +27,13 @@ from gluonts.dataset.pandas import PandasDataset
 from gluonts.evaluation import make_evaluation_predictions, Evaluator
 from pathlib import Path
 from pytorch_lightning.loggers import CSVLogger
+def compute_mae(forecasts, tss):
+    maes = []
+    for fcst, ts in zip(forecasts, tss):
+        y_true = ts.values[-len(fcst.mean):]
+        y_pred = fcst.mean
+        maes.append(np.mean(np.abs(y_true - y_pred)))
+    return float(np.mean(maes))
 
 def evaluate_model(predictor, dataset):
     forecast_it, ts_it = make_evaluation_predictions(
@@ -106,40 +115,106 @@ def plot_loss_from_logger(logger, save_path=None):
 
     df = pd.read_csv(csv_file)
 
-    # 1. 핵심: Epoch별로 그룹화하여 NaN 값을 합칩니다.
-    # 각 에폭에서 존재하는 값들만 뽑아서 평균(mean)을 내면 NaN이 사라집니다.
-    metrics = df.groupby("epoch").agg({
-        "train_loss": "mean",
-        "val_loss": "mean"
-    }).reset_index()
+    # ---------------------------
+    # 1️⃣ epoch 컬럼이 있는 경우 (이상적인 경우)
+    # ---------------------------
+    if "epoch" in df.columns:
+        cols = [c for c in ["train_loss", "val_loss"] if c in df.columns]
+        if not cols:
+            print("[WARN] train_loss / val_loss 컬럼이 없습니다.")
+            return
 
-    # 2. 시각화
+        metrics = (
+            df.groupby("epoch")[cols]
+            .mean()
+            .reset_index()
+        )
+
+        x = metrics["epoch"]
+        xlabel = "Epoch"
+
+    # ---------------------------
+    # 2️⃣ epoch이 없고 step만 있는 경우 (DeepAR에서 가장 흔함)
+    # ---------------------------
+    elif "step" in df.columns:
+        cols = [c for c in ["train_loss", "val_loss"] if c in df.columns]
+        if not cols:
+            print("[WARN] train_loss / val_loss 컬럼이 없습니다.")
+            return
+
+        metrics = df[["step"] + cols].copy()
+        x = metrics["step"]
+        xlabel = "Training Step"
+
+    # ---------------------------
+    # 3️⃣ 둘 다 없으면 포기
+    # ---------------------------
+    else:
+        print("[WARN] epoch/step 컬럼이 없어 loss curve를 그릴 수 없습니다.")
+        return
+
+    # ---------------------------
+    # 📈 시각화
+    # ---------------------------
     plt.figure(figsize=(10, 5))
-    
-    # Train Loss (파란색)
-    if not metrics["train_loss"].dropna().empty:
-        plt.plot(metrics["epoch"], metrics["train_loss"], 
-                 label='Train Loss', color='tab:blue', marker='o', markersize=4)
-    
-    # Val Loss (주황색)
-    if not metrics["val_loss"].dropna().empty:
-        plt.plot(metrics["epoch"], metrics["val_loss"], 
-                 label='Val Loss', color='tab:orange', marker='s', markersize=4)
 
-    plt.xlabel("Epoch")
+    if "train_loss" in metrics and metrics["train_loss"].dropna().any():
+        plt.plot(
+            x, metrics["train_loss"],
+            label="Train Loss",
+            marker="o", markersize=3
+        )
+
+    if "val_loss" in metrics and metrics["val_loss"].dropna().any():
+        plt.plot(
+            x, metrics["val_loss"],
+            label="Validation Loss",
+            marker="s", markersize=3
+        )
+
+    plt.xlabel(xlabel)
     plt.ylabel("Loss (Negative Log-Likelihood)")
-    plt.title("DeepAR Training & Validation Loss")
+    plt.title("DeepAR Training / Validation Loss")
     plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.5)
-    
-    # 3. 저장 및 출력
+    plt.grid(alpha=0.3)
+
     if save_path:
-        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"📈 Loss curve saved to: {save_path}")
-    
+
     plt.show()
     plt.close()
+import numpy as np
+
+def directional_accuracy(forecasts, tss):
+    accs = []
+
+    for forecast, ts in zip(forecasts, tss):
+        y_true = ts.values[-len(forecast.mean):]
+        y_pred = forecast.mean
+
+        sign_true = np.sign(y_true)
+        sign_pred = np.sign(y_pred)
+
+        acc = (sign_true == sign_pred).mean()
+        accs.append(acc)
+
+    return float(np.mean(accs))
+def compute_metrics(forecasts, tss,fold,horizon):
+    evaluator = Evaluator(quantiles=[0.1, 0.5, 0.9])
+    agg_metrics, item_metrics = evaluator(iter(tss), iter(forecasts))
     
+
+    metrics = {
+        "MAE": compute_mae(forecasts, tss),
+        "RMSE": agg_metrics.get("RMSE"),
+        "MAPE": agg_metrics.get("MAPE"),
+        "Directional_Accuracy": directional_accuracy(forecasts, tss),
+        "fold":fold,"horizon":horizon
+    }
+
+    return metrics
+
     
 def plot_predictions(forecasts, tss, item_ids, num_plots=3, save_dir=None):
     import matplotlib.pyplot as plt
@@ -225,7 +300,30 @@ def plot_loss_from_logger(logger, save_path=None):
     if save_path:
         plt.savefig(save_path)
     plt.show()
-    
+
+# def lag_features_by_1day(df: pd.DataFrame, feature_cols, group_col="item_id", time_col="time"):
+#     df = df.sort_values([group_col, time_col]).copy()
+
+#     # feature_cols만 1일 lag (누수 방지)
+#     df[feature_cols] = df.groupby(group_col)[feature_cols].shift(1)
+
+#     # lag로 생긴 NaN 제거(첫 날)
+#     df = df.dropna(subset=feature_cols).reset_index(drop=True)
+#     return df
+
+def lag_features_by_1day(df: pd.DataFrame, feature_cols, group_col="item_id", time_col="time"):
+    df = df.sort_values([group_col, time_col]).copy()
+
+    # df에 실제 존재하는 컬럼만 선택
+    existing_cols = [c for c in feature_cols if c in df.columns]
+
+    # feature_cols만 1일 lag (누수 방지)
+    df[existing_cols] = df.groupby(group_col)[existing_cols].shift(1)
+
+    # lag로 생긴 NaN 제거(첫 날)
+    df = df.dropna(subset=existing_cols).reset_index(drop=True)
+    return df
+
     
 def main(cfg: TrainConfig):
     set_seed(cfg.seed)
@@ -233,7 +331,7 @@ def main(cfg: TrainConfig):
     
     os.makedirs(cfg.checkpoint_dir, exist_ok=True)
     dfs = {}
-    for name in ["corn", "wheat", "soybean"]:
+    for name in ["corn", "wheat", "soybean"]:#,"gold","silver","copper"]:
         data_path = os.path.join(cfg.data_dir, f"preprocessing/{name}_feature_engineering.csv")
         data = pd.read_csv(data_path)
         data["item_id"] = name
@@ -243,10 +341,14 @@ def main(cfg: TrainConfig):
     # feature_cols만 추출할 때 long_df 활용 가능
     feature_cols = [
         c for c in pd.concat(dfs.values(), ignore_index=True).columns
-        if c not in ["time", "item_id"] and not c.startswith("log_return_")
+        if c not in ["time", "item_id","close"] and not c.startswith("log_return_")
     ]
+    for name in list(dfs.keys()):
+        dfs[name] = lag_features_by_1day(dfs[name], feature_cols, group_col="item_id", time_col="time")
+
     cfg.epochs=30
-    cfg.fold=[0]
+    cfg.fold=[0,1,2,3,4,5,6,7]
+
     for fold in cfg.fold:
         train_dfs= {}
         val_dfs = {}
@@ -316,6 +418,36 @@ def main(cfg: TrainConfig):
             # ===============================
             evaluator = Evaluator(quantiles=[0.1, 0.5, 0.9])
             agg_metrics, item_metrics = evaluator(iter(tss), iter(forecasts))
+            metrics = compute_metrics(forecasts, tss,fold,h)
+
+            all_results.append({"item":"ALL",
+                "fold": fold,
+                "horizon": h,
+                "MAE": metrics["MAE"],
+                "RMSE": metrics["RMSE"],
+                "MAPE": metrics["MAPE"],
+                "Directional_Accuracy": metrics["Directional_Accuracy"],
+            })
+                        
+
+            item_ids = list(val_dfs.keys())  # ['corn', 'wheat', 'soybean']
+
+            for item_id, ts, fcst in zip(item_ids, tss, forecasts):
+                metrics = compute_metrics([fcst], [ts], fold, h)
+
+                all_results.append({
+                    "item": item_id,
+                    "fold": fold,
+                    "horizon": h,
+                    "MAE": metrics["MAE"],
+                    "RMSE": metrics["RMSE"],
+                    "MAPE": metrics["MAPE"],
+                    "Directional_Accuracy": metrics["Directional_Accuracy"],
+                })
+
+
+                
+
 
             print("\n=== Validation Metrics ===")
             for k, v in agg_metrics.items():
@@ -351,7 +483,16 @@ def main(cfg: TrainConfig):
 
            
 if __name__ == "__main__":
+    all_results=[]
     cfg = tyro.cli(TrainConfig)
     main(cfg)
+    results_df = pd.DataFrame(all_results)
+    
+
+    save_csv = Path(cfg.checkpoint_dir) / "deepar_metrics_summary.csv"
+    results_df.to_csv(save_csv, index=False, float_format="%.6f")
+
+    print(f"\n✅ Metrics summary saved to {save_csv}")
+
     
     

@@ -4,13 +4,15 @@ from tyro import conf
 
 @dataclass
 class TrainConfig:
-    data_dir: str = "../src/datasets"
+    # ===== 데이터 경로 수정 (마지막 "/" 제거) =====
+    data_dir: str = "/data/ephemeral/home/pro-cv-finalproject-cv-07/python/src/datasets"
+    # ===========================================
     
     # Target commodity
     target_commodity: str = "corn"  # "corn", "soybean", "wheat"
     
     # TFT specific
-    use_variable_selection: bool = True
+    use_variable_selection: bool = False  # 일단 False (안정성)
     attention_heads: int = 4
     dropout: float = 0.1
     
@@ -25,7 +27,7 @@ class TrainConfig:
     compute_feature_importance: bool = True
     compute_temporal_importance: bool = True
     save_attention_weights: bool = True
-    interpretation_dir: str = "./src/outputs/interpretations"
+    interpretation_dir: str = "/data/ephemeral/home/pro-cv-finalproject-cv-07/python/src/outputs/interpretations"
     
     # Training
     early_stopping_patience: int = 20
@@ -44,7 +46,7 @@ class TrainConfig:
     
     batch_size: int = 64
     seq_length: int = 20
-    fold: List[int] = field(default_factory=lambda: [7])
+    fold: List[int] = field(default_factory=lambda: [0])  # 기본값을 fold 0으로 (테스트용)
     horizons: List[int] = field(default_factory=lambda: [1, 5, 10, 20])
     
     hidden_dim: int = 32
@@ -53,8 +55,8 @@ class TrainConfig:
     lr: float = 0.001
     epochs: int = 100
 
-    checkpoint_dir: str = "./src/outputs/checkpoints"
-    output_dir: str = "./src/outputs"
+    checkpoint_dir: str = "/data/ephemeral/home/pro-cv-finalproject-cv-07/python/src/outputs/checkpoints"
+    output_dir: str = "/data/ephemeral/home/pro-cv-finalproject-cv-07/python/src/outputs"
 
     seed: int = 42
     ensemble: bool = False

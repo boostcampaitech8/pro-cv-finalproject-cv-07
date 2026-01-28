@@ -6,131 +6,173 @@ from torch.utils.data import Dataset
 from typing import List, Tuple, Dict, Optional
 
 
-class TFTDataset(Dataset):
+def align_news_to_trading_dates_runtime(
+    price_df: pd.DataFrame,
+    news_df: pd.DataFrame,
+    price_date_column: str = 'time'
+) -> pd.DataFrame:
     """
-    TFT(Temporal Fusion Transformer)를 위한 Dataset 클래스
-    Multi-horizon 예측을 지원
+    런타임에 뉴스를 거래일에 맞춰 정렬
+    휴장일 뉴스는 이전 거래일과 mean pooling
+    
+    Args:
+        price_df: 가격 데이터 (거래일 정보)
+        news_df: 뉴스 데이터 (모든 날짜)
+        price_date_column: 가격 데이터의 날짜 컬럼명
+        
+    Returns:
+        거래일에 맞춰 정렬된 뉴스 DataFrame
     """
+    # 거래일 추출
+    if price_date_column in price_df.columns:
+        trading_dates = sorted(pd.to_datetime(price_df[price_date_column]).dt.date.unique())
+    elif 'date' in price_df.columns:
+        trading_dates = sorted(pd.to_datetime(price_df['date']).dt.date.unique())
+    else:
+        raise ValueError("가격 데이터에 날짜 컬럼(time 또는 date)이 없습니다")
     
-    def __init__(
-        self,
-        data: pd.DataFrame,
-        seq_length: int,
-        horizons: List[int] = [1, 5, 10, 20],
-        feature_columns: Optional[List[str]] = None,
-        target_column: str = 'Close',
-        scale: bool = True
-    ):
-        """
-        Args:
-            data: 시계열 데이터프레임
-            seq_length: lookback window size
-            horizons: 예측할 미래 시점들 (e.g., [1, 5, 10, 20])
-            feature_columns: 사용할 feature 컬럼들 (None이면 자동 선택)
-            target_column: target 가격 컬럼
-            scale: 데이터 정규화 여부
-        """
-        self.seq_length = seq_length
-        self.horizons = horizons
-        self.target_column = target_column
-        self.scale = scale
-        
-        # Feature columns 설정
-        if feature_columns is None:
-            # 'time'과 log_return_* 컬럼 제외
-            self.feature_columns = [
-                c for c in data.columns 
-                if c not in ['time', 'date'] and not c.startswith('log_return_')
-            ]
-        else:
-            self.feature_columns = feature_columns
-        
-        # 데이터 준비
-        self.data = data.copy()
-        self._prepare_data()
-        
-    def _prepare_data(self):
-        """데이터 전처리 및 정규화"""
-        # Time column 저장
-        if 'time' in self.data.columns:
-            self.times = self.data['time'].values
-        else:
-            self.times = self.data.index.values
-        
-        # Feature 데이터 추출
-        self.features = self.data[self.feature_columns].values.astype(np.float32)
-        
-        # Target 데이터 추출 (multi-horizon)
-        target_columns = [f'log_return_{h}' for h in self.horizons]
-        
-        # target 컬럼이 없으면 생성
-        for h, col in zip(self.horizons, target_columns):
-            if col not in self.data.columns:
-                print(f"Warning: {col} not found in data. Creating from {self.target_column}")
-                # log return 계산
-                self.data[col] = np.log(
-                    self.data[self.target_column].shift(-h) / self.data[self.target_column]
-                )
-        
-        self.targets = self.data[target_columns].values.astype(np.float32)
-        
-        # 정규화 (optional)
-        if self.scale:
-            self.feature_mean = np.nanmean(self.features, axis=0, keepdims=True)
-            self.feature_std = np.nanstd(self.features, axis=0, keepdims=True)
-            self.feature_std[self.feature_std == 0] = 1.0  # avoid division by zero
-            
-            self.features = (self.features - self.feature_mean) / self.feature_std
-        
-        # 유효한 인덱스 계산 (NaN 제거)
-        max_horizon = max(self.horizons)
-        self.valid_indices = []
-        
-        for i in range(len(self.data) - self.seq_length - max_horizon):
-            # Feature window 체크
-            feature_window = self.features[i:i+self.seq_length]
-            # Target 체크
-            target_idx = i + self.seq_length
-            target_values = self.targets[target_idx]
-            
-            # NaN이 없는 경우만 valid
-            if not np.isnan(feature_window).any() and not np.isnan(target_values).any():
-                self.valid_indices.append(i)
-        
-        print(f"Total samples: {len(self.data)}, Valid samples: {len(self.valid_indices)}")
+    trading_dates_set = set(trading_dates)
     
-    def __len__(self):
-        return len(self.valid_indices)
+    # 뉴스를 날짜별 딕셔너리로 변환
+    news_df_copy = news_df.copy()
+    news_df_copy['date'] = pd.to_datetime(news_df_copy['date']).dt.date
     
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        """
-        Returns:
-            dict with keys:
-                - 'encoder_input': [seq_length, num_features]
-                - 'targets': [num_horizons]
-                - 'time': timestamp
-        """
-        real_idx = self.valid_indices[idx]
-        
-        # Encoder input: [seq_length, num_features]
-        encoder_input = self.features[real_idx:real_idx + self.seq_length]
-        
-        # Target: [num_horizons]
-        target_idx = real_idx + self.seq_length
-        targets = self.targets[target_idx]
-        
-        # Time
-        time = self.times[target_idx]
-        
-        return {
-            'encoder_input': torch.FloatTensor(encoder_input),
-            'targets': torch.FloatTensor(targets),
-            'time': str(time) if isinstance(time, (pd.Timestamp, np.datetime64)) else time
+    news_by_date = {}
+    news_emb_cols = [col for col in news_df.columns if col.startswith('news_emb_')]
+    
+    for _, row in news_df_copy.iterrows():
+        news_date = row['date']
+        news_by_date[news_date] = {
+            'count': row['news_count'],
+            'embeddings': row[news_emb_cols].values
         }
     
-    def get_feature_names(self) -> List[str]:
-        """Feature 이름 반환"""
-        return self.feature_columns
+    all_news_dates = sorted(news_by_date.keys())
+    
+    # 거래일별로 뉴스 재배치
+    accumulated_news = {}
+    
+    for news_date in all_news_dates:
+        if news_date in trading_dates_set:
+            # 거래일인 경우
+            if news_date not in accumulated_news:
+                accumulated_news[news_date] = {
+                    'counts': [],
+                    'embeddings': []
+                }
+            accumulated_news[news_date]['counts'].append(news_by_date[news_date]['count'])
+            accumulated_news[news_date]['embeddings'].append(news_by_date[news_date]['embeddings'])
+        else:
+            # 휴장일인 경우 - 이전 거래일 찾기
+            prev_trading_date = None
+            for td in reversed(trading_dates):
+                if td < news_date:
+                    prev_trading_date = td
+                    break
+            
+            if prev_trading_date is not None:
+                if prev_trading_date not in accumulated_news:
+                    accumulated_news[prev_trading_date] = {
+                        'counts': [],
+                        'embeddings': []
+                    }
+                accumulated_news[prev_trading_date]['counts'].append(news_by_date[news_date]['count'])
+                accumulated_news[prev_trading_date]['embeddings'].append(news_by_date[news_date]['embeddings'])
+    
+    # 누적된 뉴스를 평균내기
+    final_news = []
+    for trade_date, data in accumulated_news.items():
+        combined_count = sum(data['counts'])
+        # Embedding mean pooling
+        combined_embedding = np.mean(data['embeddings'], axis=0)
+        
+        row_data = {
+            'date': pd.Timestamp(trade_date),
+            'news_count': combined_count
+        }
+        # news_emb_* 컬럼 추가
+        for i, emb_val in enumerate(combined_embedding):
+            row_data[f'news_emb_{i}'] = emb_val
+        
+        final_news.append(row_data)
+    
+    final_news_df = pd.DataFrame(final_news)
+    
+    # 모든 거래일에 대해 뉴스 데이터 생성
+    all_trading_dates_df = pd.DataFrame({'date': [pd.Timestamp(d) for d in trading_dates]})
+    
+    result_df = all_trading_dates_df.merge(
+        final_news_df,
+        on='date',
+        how='left'
+    )
+    
+    # 뉴스가 없는 날 처리
+    result_df['news_count'] = result_df['news_count'].fillna(0).astype(int)
+    
+    # news_emb 컬럼들을 0으로 채우기
+    for col in news_emb_cols:
+        if col in result_df.columns:
+            result_df[col] = result_df[col].fillna(0)
+    
+    return result_df
+
+
+def load_data_with_news(
+    price_data_path: str,
+    news_data_path: str
+) -> pd.DataFrame:
+    """
+    가격 데이터와 뉴스 데이터를 로드해서 병합
+    뉴스는 런타임에 거래일에 맞춰 자동 정렬
+    
+    Args:
+        price_data_path: 가격 데이터 CSV 경로
+        news_data_path: 뉴스 데이터 CSV 경로 (통합 파일)
+        
+    Returns:
+        병합된 DataFrame
+    """
+    # 가격 데이터 로드
+    price_df = pd.read_csv(price_data_path)
+    print(f"✓ Price data loaded: {len(price_df)} rows, {len(price_df.columns)} columns")
+    
+    # 뉴스 데이터 로드
+    try:
+        news_df = pd.read_csv(news_data_path)
+        print(f"✓ News data loaded: {len(news_df)} rows, {len(news_df.columns)} columns")
+        
+        # 거래일에 맞춰 뉴스 정렬
+        print(f"  → Aligning news to trading dates...")
+        aligned_news = align_news_to_trading_dates_runtime(price_df, news_df)
+        print(f"  ✓ Aligned: {len(aligned_news)} trading dates")
+        
+        # Date 컬럼 통일
+        if 'time' in price_df.columns:
+            price_df['date'] = pd.to_datetime(price_df['time']).dt.date
+            price_df['date'] = pd.to_datetime(price_df['date'])
+        
+        aligned_news['date'] = pd.to_datetime(aligned_news['date'])
+        
+        # Merge
+        merged_df = price_df.merge(aligned_news, on='date', how='left')
+        print(f"✓ Merged data: {len(merged_df)} rows, {len(merged_df.columns)} columns")
+        
+        # 뉴스 없는 날 처리
+        if 'news_count' in merged_df.columns:
+            merged_df['news_count'] = merged_df['news_count'].fillna(0).astype(int)
+        
+        news_emb_cols = [col for col in merged_df.columns if col.startswith('news_emb_')]
+        if news_emb_cols:
+            merged_df[news_emb_cols] = merged_df[news_emb_cols].fillna(0)
+            print(f"✓ Found {len(news_emb_cols)} news embedding columns")
+        
+        return merged_df
+        
+    except FileNotFoundError:
+        print(f"⚠️  News data not found at {news_data_path}")
+        print(f"   Proceeding without news features...")
+        return price_df
 
 
 def build_tft_dataset(
@@ -140,36 +182,23 @@ def build_tft_dataset(
     feature_columns: Optional[List[str]] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """
-    TFT용 데이터셋 생성 - 뉴스 embedding 포함
+    TFT용 데이터셋 생성
     """
-    
-    # ===== 1. Feature 컬럼 선택 =====
+    # Feature 컬럼 선택
     if feature_columns is None:
-        feature_columns = [
-            c for c in time_series.columns 
-            if c not in ['time', 'date', 'news_embedding_mean'] and not c.startswith('log_return_')
-        ]
+        exclude_cols = ['time', 'date']
+        log_return_cols = [col for col in time_series.columns if col.startswith('log_return_')]
+        exclude_cols.extend(log_return_cols)
+        
+        feature_columns = [c for c in time_series.columns if c not in exclude_cols]
     
     # 숫자형 컬럼만 선택
     numeric_columns = time_series[feature_columns].select_dtypes(include=[np.number]).columns.tolist()
     feature_columns = numeric_columns
     
-    print(f"Basic features: {len(feature_columns)}")
+    print(f"Using {len(feature_columns)} features")
     
-    # ===== 2. 뉴스 embedding 처리 =====
-    has_news_embedding = 'news_embedding_mean' in time_series.columns
-    
-    if has_news_embedding:
-        # 첫 번째 non-null embedding으로 차원 확인
-        sample_embedding = time_series['news_embedding_mean'].dropna().iloc[0]
-        if isinstance(sample_embedding, np.ndarray):
-            embedding_dim = len(sample_embedding)
-            print(f"News embedding dimension: {embedding_dim}")
-        else:
-            has_news_embedding = False
-            print("No valid news embeddings found")
-    
-    # ===== 3. 데이터 생성 =====
+    # 데이터 생성
     dataX = []
     dataY = []
     dataT = []
@@ -177,30 +206,17 @@ def build_tft_dataset(
     max_horizon = max(horizons)
     
     for i in range(len(time_series) - seq_length - max_horizon):
-        # 기본 Features
-        _x_basic = time_series.loc[i:i+seq_length-1, feature_columns].values
-        
-        # 뉴스 Embedding 추가
-        if has_news_embedding:
-            news_embeddings = []
-            for j in range(i, i+seq_length):
-                emb = time_series.loc[j, 'news_embedding_mean']
-                if isinstance(emb, np.ndarray):
-                    news_embeddings.append(emb)
-                else:
-                    # 없으면 zero vector
-                    news_embeddings.append(np.zeros(embedding_dim, dtype=np.float32))
-            
-            news_embeddings = np.array(news_embeddings)  # [seq_length, embedding_dim]
-            
-            # 기본 feature와 concat
-            _x = np.concatenate([_x_basic, news_embeddings], axis=1)  # [seq_length, num_features + embedding_dim]
-        else:
-            _x = _x_basic
+        # Features
+        _x = time_series.loc[i:i+seq_length-1, feature_columns].values
         
         # Targets
         target_idx = i + seq_length
-        _y = time_series.loc[target_idx, [f'log_return_{h}' for h in horizons]].values
+        target_columns = [f'log_return_{h}' for h in horizons]
+        
+        if all(col in time_series.columns for col in target_columns):
+            _y = time_series.loc[target_idx, target_columns].values
+        else:
+            continue
         
         # Time
         _t = time_series.loc[target_idx, 'time']
@@ -217,18 +233,13 @@ def build_tft_dataset(
         except (ValueError, TypeError):
             continue
     
-    # Feature 이름 업데이트
-    final_feature_names = feature_columns.copy()
-    if has_news_embedding:
-        final_feature_names.extend([f'news_emb_{i}' for i in range(embedding_dim)])
-    
-    print(f"Total features after adding embeddings: {len(final_feature_names)}")
+    print(f"Valid samples created: {len(dataX)}")
     
     return (
         np.array(dataX, dtype=np.float32),
         np.array(dataY, dtype=np.float32),
         np.array(dataT),
-        final_feature_names
+        feature_columns
     )
 
 
@@ -239,12 +250,7 @@ def train_valid_split_tft(
     split_file: str,
     fold_index: int
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    기존 train_valid_split 함수와 동일한 인터페이스
-    
-    Returns:
-        trainX, trainY, validX, validY
-    """
+    """Train/Valid split"""
     with open(split_file, 'r') as file:
         data = json.load(file)
     
@@ -270,12 +276,7 @@ def test_split_tft(
     T: np.ndarray,
     split_file: str
 ) -> Tuple[List[str], np.ndarray, np.ndarray]:
-    """
-    기존 test_split 함수와 동일한 인터페이스
-    
-    Returns:
-        test_dates, testX, testY
-    """
+    """Test split"""
     with open(split_file, 'r') as file:
         data = json.load(file)
     
@@ -293,12 +294,13 @@ def test_split_tft(
 
 class TFTDataLoader:
     """
-    여러 fold를 관리하는 DataLoader 래퍼
+    DataLoader - 공통 뉴스 파일 사용
     """
     
     def __init__(
         self,
-        data_path: str,
+        price_data_path: str,
+        news_data_path: str,
         split_file: str,
         seq_length: int,
         horizons: List[int],
@@ -306,7 +308,8 @@ class TFTDataLoader:
         num_workers: int = 4,
         feature_columns: Optional[List[str]] = None
     ):
-        self.data_path = data_path
+        self.price_data_path = price_data_path
+        self.news_data_path = news_data_path
         self.split_file = split_file
         self.seq_length = seq_length
         self.horizons = horizons
@@ -314,8 +317,8 @@ class TFTDataLoader:
         self.num_workers = num_workers
         self.feature_columns = feature_columns
         
-        # 데이터 로드
-        self.data = pd.read_csv(data_path)
+        # 데이터 로드 (런타임에 정렬)
+        self.data = load_data_with_news(price_data_path, news_data_path)
         
         # Dataset 빌드
         self.X, self.Y, self.T, self.feature_names = build_tft_dataset(
@@ -325,23 +328,19 @@ class TFTDataLoader:
             feature_columns
         )
         
-        print(f"Loaded data from {data_path}")
-        print(f"Total samples: {len(self.X)}")
-        print(f"Feature dimension: {self.X.shape[-1]}")
-        print(f"Number of horizons: {len(horizons)}")
+        print(f"\n✓ Total samples: {len(self.X)}")
+        print(f"✓ Feature dimension: {self.X.shape[-1]}")
+        print(f"✓ Number of horizons: {len(horizons)}")
     
     def get_fold_loaders(
         self,
         fold_index: int
     ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-        """
-        특정 fold의 train/valid DataLoader 반환
-        """
+        """특정 fold의 train/valid DataLoader"""
         trainX, trainY, validX, validY = train_valid_split_tft(
             self.X, self.Y, self.T, self.split_file, fold_index
         )
         
-        # PyTorch Dataset으로 변환
         train_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(trainX),
             torch.FloatTensor(trainY)
@@ -352,7 +351,6 @@ class TFTDataLoader:
             torch.FloatTensor(validY)
         )
         
-        # DataLoader 생성
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.batch_size,
@@ -372,9 +370,7 @@ class TFTDataLoader:
         return train_loader, valid_loader
     
     def get_test_loader(self) -> Tuple[List[str], torch.utils.data.DataLoader]:
-        """
-        Test DataLoader 반환
-        """
+        """Test DataLoader"""
         test_dates, testX, testY = test_split_tft(
             self.X, self.Y, self.T, self.split_file
         )
@@ -393,35 +389,3 @@ class TFTDataLoader:
         )
         
         return test_dates, test_loader
-
-
-if __name__ == "__main__":
-    # 테스트 코드
-    import os
-    
-    data_path = "./src/datasets/corn_feature_engineering.csv"
-    split_file = "./src/datasets/folds_2017_11_09.json"
-    
-    if os.path.exists(data_path) and os.path.exists(split_file):
-        loader_manager = TFTDataLoader(
-            data_path=data_path,
-            split_file=split_file,
-            seq_length=20,
-            horizons=[1, 5, 10, 20],
-            batch_size=64
-        )
-        
-        # Fold 0의 데이터 로드
-        train_loader, valid_loader = loader_manager.get_fold_loaders(fold_index=0)
-        
-        print(f"\nTrain batches: {len(train_loader)}")
-        print(f"Valid batches: {len(valid_loader)}")
-        
-        # 첫 번째 배치 확인
-        for batch_X, batch_Y in train_loader:
-            print(f"\nBatch shape:")
-            print(f"  X: {batch_X.shape}")  # [batch_size, seq_length, num_features]
-            print(f"  Y: {batch_Y.shape}")  # [batch_size, num_horizons]
-            break
-    else:
-        print("Data files not found. Please check paths.")

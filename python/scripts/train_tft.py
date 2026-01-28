@@ -42,33 +42,45 @@ def main(config: TrainConfig):
     print(f"Using device: {device}")
     print(f"{'='*60}\n")
     
-    # 데이터 경로 설정
-    data_file = f"{config.target_commodity}_with_news_features.csv"
-    data_path = os.path.join(config.data_dir, data_file)
+    # ===== 데이터 경로 설정 (수정됨) =====
+    # 가격 데이터와 뉴스 데이터 경로
+    price_file = f"preprocessing/{config.target_commodity}_feature_engineering.csv"
+    news_file = "news_features.csv"
+    
+    price_path = os.path.join(config.data_dir, price_file)
+    news_path = os.path.join(config.data_dir, news_file)
     split_file = os.path.join(config.data_dir, "rolling_fold.json")
     
-    if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Data file not found: {data_path}")
-    
+    # 경로 확인
+    if not os.path.exists(price_path):
+        raise FileNotFoundError(f"Price data not found: {price_path}")
+    if not os.path.exists(news_path):
+        print(f"⚠️  News data not found: {news_path}")
+        print(f"   Training without news features...")
     if not os.path.exists(split_file):
         raise FileNotFoundError(f"Split file not found: {split_file}")
     
-    print(f"📁 Data file: {data_path}")
+    print(f"📁 Price data: {price_path}")
+    print(f"📁 News data: {news_path}")
     print(f"📁 Split file: {split_file}")
+    # ====================================
     
     # 데이터 로더 생성
     print("\n" + "="*60)
     print("Loading Data...")
     print("="*60)
     
+    # ===== DataLoader 호출 수정 =====
     data_loader_manager = TFTDataLoader(
-        data_path=data_path,
+        price_data_path=price_path,  # 수정!
+        news_data_path=news_path,    # 수정!
         split_file=split_file,
         seq_length=config.seq_length,
         horizons=config.horizons,
         batch_size=config.batch_size,
         num_workers=config.num_workers
     )
+    # ===============================
     
     # Feature 이름 저장
     feature_names = data_loader_manager.feature_names
