@@ -1,10 +1,10 @@
-from src.configs.train_config import TrainConfig
-from src.utils.set_seed import set_seed
-from src.data.dataset import build_dataset, train_valid_split
-from src.data.preprocessing import scale_train_data
-from src.models.LSTM import LSTM
-from src.engine.trainer import train
-from src.utils.visualization import save_loss_curve
+from transformer.src.configs.train_config import TrainConfig
+from transformer.src.utils.set_seed import set_seed
+from transformer.src.data.dataset import build_dataset, train_valid_split
+from transformer.src.data.preprocessing import scale_train_data
+from transformer.src.models.LSTM import LSTM
+from transformer.src.engine.trainer import train
+from transformer.src.utils.visualization import save_loss_curve
 
 import os
 import tyro

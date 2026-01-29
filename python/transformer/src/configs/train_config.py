@@ -4,7 +4,7 @@ from tyro import conf
 
 @dataclass
 class TrainConfig:
-    data_dir: str = "./src/datasets"
+    data_dir: str = "./shared/datasets"
     
     use_ema_features: bool = False
     ema_spans: List[int] = field(default_factory=lambda: [5, 10, 20, 50, 100])
@@ -24,8 +24,8 @@ class TrainConfig:
     lr: float = 0.001
     epochs: int = 100
 
-    checkpoint_dir: str = "./src/outputs/checkpoints"
-    output_dir: str = "./src/outputs"
+    checkpoint_dir: str = "./transformer/src/outputs/checkpoints"
+    output_dir: str = "./transformer/src/outputs"
 
     seed: int = 42
     ensemble: bool = False
