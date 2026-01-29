@@ -5,48 +5,49 @@
 ```Bash
 export PYTHONPATH=$PYTHONPATH:.
 ```
-- 아래 파일 구조 유지
+- 파일 구조 변경 ⭐⭐⭐
 ```Bash
-Python
-|-- EDA
-|   `-- EDA.ipynb
-|-- scripts
-|   |-- preprocessing.py
-|   |-- test.py
-|   `-- train.py
-`-- src
-    |-- configs
-    |   |-- __pycache__
-    |   `-- train_config.py
-    |-- data
-    |   |-- __pycache__
-    |   |-- dataset.py
-    |   |-- feature_engineering.py
-    |   |-- postprocessing.py
-    |   `-- preprocessing.py
-    |-- datasets
-    |   |-- corn_future_price.csv
-    |   |-- news_articles_resources.csv
-    |   |-- news_articles_resources_entities.csv
-    |   |-- news_articles_resources_triples.csv
-    |   |-- resource_article_clustering.html
-    |   |-- rolling_fold.json
-    |   |-- soybean_future_price.csv
-    |   `-- wheat_future_price.csv
-    |-- engine
-    |   |-- __pycache__
-    |   |-- inference.py
-    |   `-- trainer.py
-    |-- metrics
-    |   |-- __pycache__
-    |   `-- metrics.py
-    |-- models
-    |   |-- LSTM.py
-    |   `-- __pycache__
-    |-- outputs
-    `-- utils
-        |-- set_seed.py
-        `-- visualization.py
+.
+|-- README.md
+`-- python
+    |-- etc
+    |   `-- EDA.ipynb
+    |-- predictVLM
+    |   |-- scripts
+    |   `-- src
+    |-- shared
+    |   `-- datasets
+    |       |-- corn_future_price.csv
+    |       |-- news_articles_resources.csv
+    |       |-- news_articles_resources_entities.csv
+    |       |-- resource_article_clustering.html
+    |       |-- rolling_fold.json
+    |       |-- soybean_future_price.csv
+    |       `-- wheat_future_price.csv
+    `-- transformer
+        |-- scripts
+        |   |-- preprocessing.py
+        |   |-- test.py
+        |   `-- train.py
+        `-- src
+            |-- configs
+            |   `-- train_config.py
+            |-- data
+            |   |-- dataset.py
+            |   |-- feature_engineering.py
+            |   |-- postprocessing.py
+            |   `-- preprocessing.py
+            |-- engine
+            |   |-- inference.py
+            |   `-- trainer.py
+            |-- metrics
+            |   `-- metrics.py
+            |-- models
+            |   `-- LSTM.py
+            |-- outputs
+            `-- utils
+                |-- set_seed.py
+                `-- visualization.py
 ```
 - 제일 중요한거 그냥 제 나름대로 code refactoring한거라 이상한거 많을수도 있음 코드 돌리면서 자유롭게 수정하셈
 
