@@ -2,3 +2,5 @@ python/shared/datasets/
 *outputs/
 
 __pycache__/
+
+.env
