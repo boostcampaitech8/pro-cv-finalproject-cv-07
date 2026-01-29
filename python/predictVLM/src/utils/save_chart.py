@@ -9,6 +9,16 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 
+def parse_emas(emas_str: str) -> list:
+    """
+    EMA 문자열을 리스트로 파싱
+    예: "0" -> [], "20" -> [20], "5,10,20" -> [5, 10, 20]
+    """
+    if emas_str == "0":
+        return []
+    return [int(x.strip()) for x in emas_str.split(",")]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate candlestick chart images for VLM experiments")
 
@@ -46,10 +56,11 @@ def parse_args():
     )
     parser.add_argument(
         "--emas",
-        type=int,
+        type=str,
         nargs="+",
-        default=[0],
-        help="EMA values to plot (0 for no EMA, e.g., --emas 0 20)"
+        default=["0"],
+        help="EMA combinations to plot. Use '0' for no EMA, comma-separated for multiple. "
+             "(e.g., --emas 0 20 5,10,20)"
     )
     parser.add_argument(
         "--output-dir",
@@ -93,7 +104,7 @@ def add_ema_features(df: pd.DataFrame, spans: list) -> pd.DataFrame:
 def generate_images(
     df: pd.DataFrame,
     windows: list,
-    emas: list,
+    emas_list: list,  # list of lists, e.g., [[], [20], [5, 10, 20]]
     end_start: str,
     end_stop: str,
     output_dir: str,
@@ -115,21 +126,27 @@ def generate_images(
     print(f"Total target dates: {len(ends)}")
 
     for w in windows:
-        for ema in emas:
+        for emas in emas_list:
             saved = 0
             skipped = 0
             t0 = time.time()
 
-            # Setup output directory
-            out_dir = Path(output_dir) / f"window_{w}_ema{ema}"
+            # 폴더명 생성: emas가 비어있으면 ema0, 아니면 ema5_10_20 형식
+            if len(emas) == 0:
+                ema_suffix = "ema0"
+            else:
+                ema_suffix = "ema" + "_".join(map(str, emas))
+
+            out_dir = Path(output_dir) / f"window_{w}_{ema_suffix}"
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            # Validate EMA column
-            ema_col = None if ema == 0 else f"EMA_{ema}"
-            if ema_col is not None and ema_col not in df.columns:
-                raise KeyError(f"EMA_{ema} column not found. Available columns: {list(df.columns)}")
+            # EMA 컬럼 검증
+            for ema in emas:
+                ema_col = f"EMA_{ema}"
+                if ema_col not in df.columns:
+                    raise KeyError(f"EMA_{ema} column not found. Available columns: {list(df.columns)}")
 
-            print(f"\nGenerating: window={w}, ema={ema}, output={out_dir}")
+            print(f"\nGenerating: window={w}, emas={emas if emas else 'None'}, output={out_dir}")
 
             # Count valid samples
             valid_count = sum(1 for pos in pos_arr if pos != -1 and (pos - w) >= 0)
@@ -152,10 +169,11 @@ def generate_images(
                     skipped += 1
                     continue
 
-                # Prepare addplot for EMA
-                addplots = None
-                if ema_col is not None:
-                    addplots = [mpf.make_addplot(df_win[ema_col], color='#ef5714', width=2.0)]
+                # EMA addplot 생성 (여러 개 가능)
+                addplots = []
+                for ema in emas:
+                    ema_col = f"EMA_{ema}"
+                    addplots.append(mpf.make_addplot(df_win[ema_col], color='#ef5714', width=2.0))
 
                 # Plot kwargs
                 plot_kwargs = dict(
@@ -165,11 +183,11 @@ def generate_images(
                     figsize=figsize,
                     returnfig=True,
                 )
-                if addplots is not None:
+                if addplots:
                     plot_kwargs["addplot"] = addplots
 
                 # Generate and save chart
-                fig, axlist = mpf.plot(df_win, **plot_kwargs)
+                fig, _ = mpf.plot(df_win, **plot_kwargs)
                 fig.savefig(
                     out_path,
                     dpi=dpi,
@@ -215,13 +233,16 @@ def verify_images(output_dir: str, image_size: int):
 def main():
     args = parse_args()
 
+    # EMA 문자열들을 리스트로 변환
+    emas_list = [parse_emas(e) for e in args.emas]
+
     print("=" * 60)
     print("Chart Image Generator")
     print("=" * 60)
     print(f"Data path: {args.data_path}")
-    print(f"EMA spans: {args.spans}")
+    print(f"EMA spans to calculate: {args.spans}")
     print(f"Windows: {args.windows}")
-    print(f"EMAs to plot: {args.emas}")
+    print(f"EMA combinations to plot: {emas_list}")
     print(f"Date range: {args.end_stop} ~ {args.end_start}")
     print(f"Output dir: {args.output_dir}")
     print(f"Chart type: {args.chart_type}")
@@ -242,7 +263,7 @@ def main():
     generate_images(
         df=df,
         windows=args.windows,
-        emas=args.emas,
+        emas_list=emas_list,
         end_start=args.end_start,
         end_stop=args.end_stop,
         output_dir=args.output_dir,
