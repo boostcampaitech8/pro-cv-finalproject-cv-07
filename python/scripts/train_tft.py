@@ -38,7 +38,10 @@ from src.utils.visualization import save_loss_curve
 
 def main(config: TrainConfig):
     set_seed(config.seed)
-    
+
+    h_tag = "h" + "-".join(map(str, config.horizons))
+    print(f"[DEBUG] horizons = {config.horizons} -> h_tag = {h_tag}")
+
     device = torch.device('cuda' if torch.cuda.is_available() and config.device == 'cuda' else 'cpu')
     
     all_summaries = {}
@@ -85,7 +88,7 @@ def main(config: TrainConfig):
             print(f"{'='*60}\n")
             
             # ===== 폴더 구조 생성 =====
-            fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}"
+            fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}_{h_tag}"
             viz_dir = fold_dir / "visualizations"
             interp_dir = fold_dir / "interpretations"
             
@@ -173,8 +176,10 @@ def main(config: TrainConfig):
                         
                         outputs = model(x_val, return_attention=True)
                         
-                        if 'variable_importance' in outputs and config.compute_feature_importance:
-                            all_var_importance.append(outputs['variable_importance'].cpu().numpy())
+                        vi = outputs.get('variable_importance', None)
+
+                        if vi is not None and config.compute_feature_importance:
+                            all_var_importance.append(vi.detach().cpu().numpy())
                         
                         if 'attention_weights' in outputs and config.compute_temporal_importance:
                             all_attn_weights.append(outputs['attention_weights'].cpu().numpy())
@@ -185,9 +190,12 @@ def main(config: TrainConfig):
                     var_importance = np.concatenate(all_var_importance, axis=0).mean(axis=0)
                     interp_data['variable_importance'] = var_importance
                 
-                if all_attn_weights:
-                    attn_weights = np.concatenate(all_attn_weights, axis=0).mean(axis=0)
-                    interp_data['attention_weights'] = attn_weights
+                interp_data = {}
+
+                if hasattr(model, 'attention_history'):
+                    attn = np.array(model.attention_history)  
+                    # shape: [epochs, batch, heads, seq, seq]
+                    interp_data['attention_weights'] = attn
                 
                 if interp_data:
                     interp_path = interp_dir / "interpretation_data.npz"

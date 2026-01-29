@@ -347,7 +347,7 @@ def main(cfg: TrainConfig):
         dfs[name] = lag_features_by_1day(dfs[name], feature_cols, group_col="item_id", time_col="time")
 
     cfg.epochs=30
-    cfg.fold=[0,1,2,3,4,5,6,7]
+    cfg.fold=[0,1,2]
 
     for fold in cfg.fold:
         train_dfs= {}

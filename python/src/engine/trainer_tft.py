@@ -152,6 +152,13 @@ def train(model, train_loader, valid_loader, criterion, optimizer, device, num_e
         compute_detailed = (epoch == num_epochs - 1) or (patience_counter >= patience - 1)
         avg_valid_loss, metrics = validation(model, valid_loader, criterion, device, compute_detailed)
         valid_hist[epoch] = avg_valid_loss
+
+        if hasattr(model, 'temporal_importance') and model.temporal_importance is not None:
+            if not hasattr(model, '_saved_attention'):
+                model._saved_attention = []
+            model._saved_attention.append(
+                model.temporal_importance.detach().cpu().numpy()
+            )
         
         # ===== Best model =====
         if avg_valid_loss < best_val_loss:
@@ -184,5 +191,8 @@ def train(model, train_loader, valid_loader, criterion, optimizer, device, num_e
     if best_metrics:
         print(f'\n📊 Best Model Validation Metrics:')
         print(f'   Overall - MAE: {best_metrics["mae_overall"]:.6f}, RMSE: {best_metrics["rmse_overall"]:.6f}, DA: {best_metrics["da_overall"]:.2f}%, R²: {best_metrics["r2_overall"]:.4f}')
+        
+        if hasattr(model, '_saved_attention'):
+            model.attention_history = model._saved_attention
     
     return model.eval(), train_hist[:epoch+1], valid_hist[:epoch+1], best_metrics

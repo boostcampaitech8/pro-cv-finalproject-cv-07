@@ -33,7 +33,7 @@ class TrainConfig:
     # ===== Training =====
     lr: float = 0.001               # LSTM과 동일
     epochs: int = 100
-    early_stopping_patience: int = 20
+    early_stopping_patience: int = 2
     weight_decay: float = 1e-5
     
     # ===== Others =====

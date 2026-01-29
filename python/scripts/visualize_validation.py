@@ -137,6 +137,9 @@ def main(config: TrainConfig):
     print(f"Target: {config.target_commodity}")
     print(f"Fold: {config.fold[0]}")
     print(f"{'='*60}\n")
+
+    h_tag = "h" + "-".join(map(str, config.horizons))
+    print(f"[DEBUG] horizons = {config.horizons} -> h_tag = {h_tag}")
     
     if len(config.fold) != 1:
         raise ValueError("Please specify single fold. e.g., --fold 0")
@@ -152,7 +155,7 @@ def main(config: TrainConfig):
     split_file = os.path.join(config.data_dir, "rolling_fold.json")
     
     # ===== Checkpoint 경로 (수정됨!) =====
-    fold_dir = Path(config.checkpoint_dir) / f"TFT_{config.target_commodity}_fold{fold_idx}"
+    fold_dir = Path(config.checkpoint_dir) / f"TFT_{config.target_commodity}_fold{fold_idx}_{h_tag}"
     checkpoint_path = fold_dir / "best_model.pt"
     viz_dir = fold_dir / "visualizations"
     

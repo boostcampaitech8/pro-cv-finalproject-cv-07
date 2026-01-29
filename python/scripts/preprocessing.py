@@ -10,8 +10,14 @@ import tyro
 
 def main(cfg: TrainConfig):
     set_seed(cfg.seed)
-
-    news_df = pd.read_csv(os.path.join(cfg.data_dir, "news_articles_resources.csv"))
+    cfg.use_news_imformation_features=True
+    cfg.use_ema_features=True
+    cfg.ema_spans=True
+    cfg.use_volatility_features=True
+    cfg.volatility_windows=True
+    cfg.use_news_count_features=True
+    
+    news_df = pd.read_csv(os.path.join(cfg.data_dir, "news_articles_gold.csv"))
 
     os.makedirs(os.path.join(cfg.data_dir, "preprocessing"), exist_ok=True)
     
@@ -32,11 +38,11 @@ def main(cfg: TrainConfig):
                 quoting=csv.QUOTE_ALL
             )
 
-    for name in ["gold","silver","copper"]:
+    for name in ["silver","copper"]:
         data = pd.read_csv(os.path.join(cfg.data_dir, f"{name}_future_price.csv"))
         data = add_log_return_feature(data, cfg.horizons)
-        data = add_ema_features(data, cfg.ema_spans) if cfg.use_ema_features else data
-        data = add_volatility_features(data, cfg.volatility_windows) if cfg.use_volatility_features else data
+        data = add_ema_features(data) if cfg.use_ema_features else data
+        data = add_volatility_features(data) if cfg.use_volatility_features else data
         data = add_news_count_feature(data, news_df) if cfg.use_news_count_features else data
         data = add_news_imformation_features(data, filtering_news_df) if cfg.use_news_imformation_features else data
         data.to_csv(os.path.join(cfg.data_dir, f"preprocessing/{name}_feature_engineering.csv"), index=False)
