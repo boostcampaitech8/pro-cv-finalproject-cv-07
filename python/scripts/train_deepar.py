@@ -11,6 +11,7 @@ from src.utils.visualization import save_loss_curve
 from collections import defaultdict
 import os
 import tyro
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -331,7 +332,7 @@ def main(cfg: TrainConfig):
     
     os.makedirs(cfg.checkpoint_dir, exist_ok=True)
     dfs = {}
-    for name in ["corn", "wheat", "soybean"]:#,"gold","silver","copper"]:
+    for name in ["corn", "wheat", "soybean","gold","silver","copper"]:#,"gold","silver","copper"]:
         data_path = os.path.join(cfg.data_dir, f"preprocessing/{name}_feature_engineering.csv")
         data = pd.read_csv(data_path)
         data["item_id"] = name
@@ -347,7 +348,7 @@ def main(cfg: TrainConfig):
         dfs[name] = lag_features_by_1day(dfs[name], feature_cols, group_col="item_id", time_col="time")
 
     cfg.epochs=30
-    cfg.fold=[0,1,2]
+    cfg.fold=[7]
 
     for fold in cfg.fold:
         train_dfs= {}
