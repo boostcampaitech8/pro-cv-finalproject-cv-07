@@ -24,52 +24,81 @@ Temporal Fusion Transformer (TFT)를 활용한 Multi-Horizon 주식 가격 예�
 ## 프로젝트 구조
 
 ```
-Python/
-├── EDA/
-│   └── EDA.ipynb
-├── scripts/
-│   ├── preprocessing.py          # 데이터 전처리
-│   ├── train_tft.py             # TFT 학습 메인 스크립트
-│   ├── test.py                  # 테스트/평가
-│   └── interpret.py             # 해석 가능성 분석
-├── src/
-│   ├── configs/
-│   │   ├── train_config.py      # 학습 설정
-│   │   └── model_config.py      # 모델 아키텍처 설정
-│   ├── data/
-│   │   ├── dataset.py           # PyTorch Dataset (LSTM용)
-│   │   ├── dataset_tft.py       # PyTorch Dataset (TFT용)
-│   │   ├── news_preprocessing.py # 뉴스 데이터 전처리
-│   │   ├── feature_engineering.py
-│   │   ├── preprocessing.py
-│   │   └── postprocessing.py
-│   ├── datasets/
-│   │   ├── corn_future_price.csv
-│   │   ├── soybean_future_price.csv
-│   │   ├── wheat_future_price.csv
-│   │   ├── news_articles_resources.csv
-│   │   └── folds_2017_11_09.json
-│   ├── engine/
-│   │   ├── trainer.py           # LSTM Trainer
-│   │   ├── trainer_tft.py       # TFT Trainer
-│   │   └── inference.py
-│   ├── metrics/
-│   │   └── metrics.py
-│   ├── models/
-│   │   ├── LSTM.py              # 기존 LSTM 모델
-│   │   ├── TFT.py               # TFT 모델
-│   │   └── ensemble.py          # Fold 앙상블
-│   ├── interpretation/
-│   │   ├── interpretation.py    # 중요도 분석
-│   │   └── visualizer.py
-│   ├── outputs/
-│   │   ├── checkpoints/         # 학습된 모델
-│   │   ├── predictions/         # 예측 결과
-│   │   └── interpretations/     # 중요도 분석 결과
-│   └── utils/
-│       ├── set_seed.py
-│       └── visualization.py
-└── requirements.txt
+pro-csv-fianlproject-cv-07  # git repo TFT brunch
+└── Python/
+    ├── __init__.py
+    ├── EDA/
+    │   └── EDA.ipynb
+    ├── scripts/
+    │   ├── preprocessing.py          # 데이터 전처리
+    │   ├── train_tft.py             # TFT 학습 메인 스크립트
+    │   ├── test_tft.py                  # 테스트/평가
+    │   ├── view_interpretation.py
+    │   └── train_deepar.py
+    ├── src/
+    │   ├── configs/
+    │   │   ├── __init__.py
+    │   │   ├── train_config.py      # 학습 설정
+    │   │   └── model_config.py      # 모델 아키텍처 설정
+    │   ├── data/
+    │   │   ├── __init__.py
+    │   │   ├── dataset.py           # PyTorch Dataset (LSTM용)
+    │   │   ├── dataset_tft.py       # PyTorch Dataset (TFT용)
+    │   │   ├── news_preprocessing.py # 뉴스 데이터 전처리
+    │   │   ├── feature_engineering.py
+    │   │   ├── preprocessing.py
+    │   │   └── postprocessing.py
+    │   ├── datasets/
+    │   │   ├── preprocessing/
+    │   │   │   ├── corn_feature_engineering.csv
+    │   │   │   ├── soybean_feature_engineering.csv
+    │   │   │   ├── wheat_feature_engineering.csv
+    │   │   │   ├── gold_feature_engineering.csv
+    │   │   │   ├── silver_feature_engineering.csv
+    │   │   │   └── wheat_feature_engineering.csv
+    │   │   ├── corn_future_price.csv
+    │   │   ├── soybean_future_price.csv
+    │   │   ├── wheat_future_price.csv
+    │   │   ├── cooper_future_price.csv
+    │   │   ├── gold_future_price.csv
+    │   │   ├── silver_future_price.csv
+    │   │   ├── news_articles_resources.csv
+    │   │   ├── news_features.csv
+    │   │   └── rolling_fold.json
+    │   ├── engine/
+    │   │   ├── __init__.py
+    │   │   ├── trainer.py           # LSTM Trainer
+    │   │   ├── trainer_tft.py       # TFT Trainer
+    │   │   └── inference.py
+    │   ├── metrics/
+    │   │   ├── __init__.py
+    │   │   └── metrics.py
+    │   ├── models/
+    │   │   ├── LSTM.py              # 기존 LSTM 모델
+    │   │   ├── TFT.py               # TFT 모델
+    │   │   └── ensemble.py          # Fold 앙상블
+    │   ├── interpretation/
+    │   │   ├── interpretation.py    # 중요도 분석
+    │   │   └── visualizer.py
+    │   ├── outputs/
+    │   │   ├── checkpoints/         # 학습된 모델
+    │   │   ├── predictions/
+    │   │   │   ├── corn_fold_0_test_metrics.json         
+    │   │   │   ├── corn_fold_0_test_predictions.csv
+    │   │   │   └── corn_predictions.csv
+    │   │   ├── visualizations/      
+    │   │   │       ├── fold_0_loss_curve.png        
+    │   │   │       ├── fold_0_test_all_horizons.png
+    │   │   │       ├── fold_0_test_h1_horizons.png
+    │   │   │       ├── fold_0_test_h5_horizons.png
+    │   │   │       ├── fold_0_test_h10_horizons.png
+    │   │   │       └── fold_0_test_h20_horizons.png
+    │   │   └── interpretations/     # 중요도 분석 결과
+    │   └── utils/
+    │       ├── __init__.py
+    │       ├── set_seed.py
+    │       └── visualization.py
+    └── requirements.txt
 ```
 
 ## 설치 방법

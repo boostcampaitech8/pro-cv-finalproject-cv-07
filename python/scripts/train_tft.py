@@ -1,255 +1,276 @@
 """
-TFT Stock Price Prediction - Main Training Script
+TFT Training Script - Final Version
 
-Usage:
-    python train_tft.py --target_commodity corn --seq_length 20 --fold 0 1 2 3 4 5 6 7
+폴더 구조:
+checkpoints/TFT_corn_fold0/
+  ├── best_model.pt
+  ├── visualizations/
+  │   ├── loss_curve.png
+  │   ├── validation_h1.png
+  │   ├── validation_h5.png
+  │   ├── validation_h10.png
+  │   └── validation_h20.png
+  └── interpretations/
+      ├── feature_importance.png
+      ├── attention_heatmap.png
+      └── interpretation_data.npz
 """
 
 import os
 import sys
 import torch
-import numpy as np
+import torch.nn as nn
 import pandas as pd
+import numpy as np
+import json
 from pathlib import Path
 import tyro
-from tqdm import tqdm
 
-# 현재 디렉토리를 path에 추가
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.configs.train_config import TrainConfig
-from src.data.dataset_tft import TFTDataLoader, build_tft_dataset
-from src.models.TFT import TemporalFusionTransformer, QuantileLoss
-from src.engine.trainer_tft import TFTTrainer, train_multiple_folds
-from src.models.ensemble import FoldEnsemble, select_best_fold
-from src.interpretation.interpretation import (
-    FeatureImportanceAnalyzer,
-    AttentionAnalyzer,
-    InterpretationReport
-)
 from src.utils.set_seed import set_seed
+from src.data.dataset_tft import TFTDataLoader
+from src.models.TFT import TemporalFusionTransformer, QuantileLoss
+from src.engine.trainer_tft import train
+from src.utils.visualization import save_loss_curve
 
 
 def main(config: TrainConfig):
-    """메인 함수"""
-    
-    # Seed 설정
     set_seed(config.seed)
     
-    # Device 설정
     device = torch.device('cuda' if torch.cuda.is_available() and config.device == 'cuda' else 'cpu')
+    
+    all_summaries = {}
+    
+    # ===== Loop: commodities =====
+    for commodity in [config.target_commodity]:
+        print(f"\n{'='*60}")
+        print(f"Training: {commodity.upper()}")
+        print(f"{'='*60}\n")
+        
+        # Data paths
+        price_file = f"preprocessing/{commodity}_feature_engineering.csv"
+        news_file = "news_features.csv"
+        
+        price_path = os.path.join(config.data_dir, price_file)
+        news_path = os.path.join(config.data_dir, news_file)
+        split_file = os.path.join(config.data_dir, "rolling_fold.json")
+        
+        if not os.path.exists(price_path):
+            print(f"{price_path} 파일 존재하지 않음")
+            return
+        
+        # Load data
+        print("Loading data...")
+        data_loader = TFTDataLoader(
+            price_data_path=price_path,
+            news_data_path=news_path,
+            split_file=split_file,
+            seq_length=config.seq_length,
+            horizons=config.horizons,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers
+        )
+        
+        print(f"✓ Features: {data_loader.X.shape[-1]}")
+        print(f"✓ Horizons: {config.horizons}")
+        
+        commodity_summary = {}
+        
+        # ===== Loop: folds =====
+        for fold in config.fold:
+            print(f"\n{'='*60}")
+            print(f"Fold {fold}")
+            print(f"{'='*60}\n")
+            
+            # ===== 폴더 구조 생성 =====
+            fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}"
+            viz_dir = fold_dir / "visualizations"
+            interp_dir = fold_dir / "interpretations"
+            
+            fold_dir.mkdir(parents=True, exist_ok=True)
+            viz_dir.mkdir(exist_ok=True)
+            interp_dir.mkdir(exist_ok=True)
+            
+            # Get loaders
+            train_loader, valid_loader = data_loader.get_fold_loaders(fold)
+            
+            # Model
+            model = TemporalFusionTransformer(
+                num_features=data_loader.X.shape[-1],
+                num_horizons=len(config.horizons),
+                hidden_dim=config.hidden_dim,
+                lstm_layers=config.num_layers,
+                attention_heads=config.attention_heads,
+                dropout=config.dropout,
+                use_variable_selection=config.use_variable_selection,
+                quantiles=config.quantiles if config.quantile_loss else None
+            )
+            model = model.to(device)
+            
+            # Optimizer & Criterion
+            optimizer = torch.optim.Adam(
+                model.parameters(),
+                lr=config.lr,
+                weight_decay=config.weight_decay
+            )
+            
+            if config.quantile_loss:
+                criterion = QuantileLoss(quantiles=config.quantiles)
+            else:
+                criterion = nn.MSELoss()
+            
+            # Train!
+            model, train_hist, valid_hist, best_metrics = train(
+                model, train_loader, valid_loader,
+                criterion, optimizer, device,
+                num_epochs=config.epochs,
+                patience=config.early_stopping_patience
+            )
+            
+            # ===== Save checkpoint (개선된 구조) =====
+            checkpoint = {
+                "model_state_dict": model.state_dict(),
+                "train_hist": train_hist,
+                "valid_hist": valid_hist,
+                "best_metrics": best_metrics,
+                "config": {
+                    "hidden_dim": config.hidden_dim,
+                    "num_layers": config.num_layers,
+                    "attention_heads": config.attention_heads,
+                    "dropout": config.dropout,
+                    "horizons": config.horizons,
+                    "seq_length": config.seq_length
+                }
+            }
+            
+            checkpoint_path = fold_dir / "best_model.pt"
+            torch.save(checkpoint, checkpoint_path)
+            print(f"\n✓ Checkpoint saved: {checkpoint_path}")
+            
+            # ===== Save loss curve =====
+            loss_curve_path = viz_dir / "loss_curve.png"
+            save_loss_curve(
+                train_hist, valid_hist,
+                str(viz_dir),
+                "loss_curve.png"
+            )
+            print(f"✓ Loss curve saved: {loss_curve_path}")
+            
+            # ===== Interpretations (Variable importance & Attention) =====
+            if config.compute_feature_importance or config.compute_temporal_importance:
+                print("\n📊 Computing interpretations...")
+                
+                # Validation 데이터로 interpretation 계산
+                model.eval()
+                all_var_importance = []
+                all_attn_weights = []
+                
+                with torch.no_grad():
+                    for x_val, y_val in valid_loader:
+                        x_val = x_val.to(device)
+                        
+                        outputs = model(x_val, return_attention=True)
+                        
+                        if 'variable_importance' in outputs and config.compute_feature_importance:
+                            all_var_importance.append(outputs['variable_importance'].cpu().numpy())
+                        
+                        if 'attention_weights' in outputs and config.compute_temporal_importance:
+                            all_attn_weights.append(outputs['attention_weights'].cpu().numpy())
+                
+                # Save interpretation data
+                interp_data = {}
+                if all_var_importance:
+                    var_importance = np.concatenate(all_var_importance, axis=0).mean(axis=0)
+                    interp_data['variable_importance'] = var_importance
+                
+                if all_attn_weights:
+                    attn_weights = np.concatenate(all_attn_weights, axis=0).mean(axis=0)
+                    interp_data['attention_weights'] = attn_weights
+                
+                if interp_data:
+                    interp_path = interp_dir / "interpretation_data.npz"
+                    np.savez(interp_path, **interp_data)
+                    print(f"✓ Interpretations saved: {interp_path}")
+                    
+                    # Visualization (간단)
+                    try:
+                        import matplotlib.pyplot as plt
+                        
+                        # Variable importance
+                        if 'variable_importance' in interp_data:
+                            plt.figure(figsize=(10, 6))
+                            importance = interp_data['variable_importance']
+                            top_k = min(20, len(importance))
+                            top_indices = np.argsort(importance)[-top_k:]
+                            
+                            plt.barh(range(top_k), importance[top_indices])
+                            plt.xlabel('Importance')
+                            plt.title('Top Feature Importance')
+                            plt.tight_layout()
+                            plt.savefig(interp_dir / "feature_importance.png", dpi=150)
+                            plt.close()
+                            print(f"✓ Feature importance plot saved")
+                        
+                        # Attention heatmap
+                        if 'attention_weights' in interp_data:
+                            plt.figure(figsize=(10, 6))
+                            attn = interp_data['attention_weights']
+                            plt.imshow(attn.T, aspect='auto', cmap='viridis')
+                            plt.colorbar()
+                            plt.xlabel('Time Step')
+                            plt.ylabel('Horizon')
+                            plt.title('Temporal Attention Weights')
+                            plt.tight_layout()
+                            plt.savefig(interp_dir / "attention_heatmap.png", dpi=150)
+                            plt.close()
+                            print(f"✓ Attention heatmap saved")
+                    except Exception as e:
+                        print(f"⚠️  Visualization failed: {e}")
+            
+            # Fold summary
+            if best_metrics:
+                fold_summary = {
+                    'best_epoch': len(train_hist),
+                    'best_valid_loss': float(valid_hist.min()),
+                    'final_train_loss': float(train_hist[-1]),
+                    'mae_overall': float(best_metrics['mae_overall']),
+                    'rmse_overall': float(best_metrics['rmse_overall']),
+                    'da_overall': float(best_metrics['da_overall']),
+                    'r2_overall': float(best_metrics['r2_overall']),
+                }
+                
+                for h in range(len(config.horizons)):
+                    fold_summary[f'mae_h{h}'] = float(best_metrics[f'mae_h{h}'])
+                    fold_summary[f'rmse_h{h}'] = float(best_metrics[f'rmse_h{h}'])
+                    fold_summary[f'da_h{h}'] = float(best_metrics[f'da_h{h}'])
+                    fold_summary[f'r2_h{h}'] = float(best_metrics[f'r2_h{h}'])
+                
+                commodity_summary[f'fold_{fold}'] = fold_summary
+        
+        if commodity_summary:
+            best_fold = min(commodity_summary.items(), 
+                          key=lambda x: x[1]['best_valid_loss'])[0]
+            commodity_summary['best_fold'] = best_fold
+        
+        all_summaries[commodity] = commodity_summary
+    
+    # Save summary JSON
+    summary_path = os.path.join(config.output_dir, "training_summary.json")
+    with open(summary_path, 'w') as f:
+        json.dump(all_summaries, f, indent=2)
+    
     print(f"\n{'='*60}")
-    print(f"Using device: {device}")
-    print(f"{'='*60}\n")
-    
-    # ===== 데이터 경로 설정 (수정됨) =====
-    # 가격 데이터와 뉴스 데이터 경로
-    price_file = f"preprocessing/{config.target_commodity}_feature_engineering.csv"
-    news_file = "news_features.csv"
-    
-    price_path = os.path.join(config.data_dir, price_file)
-    news_path = os.path.join(config.data_dir, news_file)
-    split_file = os.path.join(config.data_dir, "rolling_fold.json")
-    
-    # 경로 확인
-    if not os.path.exists(price_path):
-        raise FileNotFoundError(f"Price data not found: {price_path}")
-    if not os.path.exists(news_path):
-        print(f"⚠️  News data not found: {news_path}")
-        print(f"   Training without news features...")
-    if not os.path.exists(split_file):
-        raise FileNotFoundError(f"Split file not found: {split_file}")
-    
-    print(f"📁 Price data: {price_path}")
-    print(f"📁 News data: {news_path}")
-    print(f"📁 Split file: {split_file}")
-    # ====================================
-    
-    # 데이터 로더 생성
-    print("\n" + "="*60)
-    print("Loading Data...")
-    print("="*60)
-    
-    # ===== DataLoader 호출 수정 =====
-    data_loader_manager = TFTDataLoader(
-        price_data_path=price_path,  # 수정!
-        news_data_path=news_path,    # 수정!
-        split_file=split_file,
-        seq_length=config.seq_length,
-        horizons=config.horizons,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers
-    )
-    # ===============================
-    
-    # Feature 이름 저장
-    feature_names = data_loader_manager.feature_names
-    print(f"\n✓ Number of features: {len(feature_names)}")
-    print(f"✓ Horizons: {config.horizons}")
-    print(f"✓ Sequence length: {config.seq_length}")
-    
-    # 모델 학습
-    print("\n" + "="*60)
-    print("Training Models...")
-    print("="*60)
-    
-    fold_results = train_multiple_folds(
-        model_class=TemporalFusionTransformer,
-        data_loader_manager=data_loader_manager,
-        config=config,
-        device=device,
-        folds=config.fold
-    )
-    
-    # Fold 성능 요약
-    print("\n" + "="*60)
-    print("Fold Performance Summary")
-    print("="*60)
-    
-    ensemble = FoldEnsemble(
-        fold_results=fold_results,
-        method=config.ensemble_method
-    )
-    
-    fold_summary = ensemble.get_fold_summary()
-    
-    for fold_key, metrics in fold_summary.items():
-        if fold_key == 'best_fold':
-            print(f"\n🏆 Best Fold: {metrics}")
-        else:
-            print(f"\n{fold_key}:")
-            print(f"  Best Epoch: {metrics['best_epoch']}")
-            print(f"  Best Valid Loss: {metrics['best_valid_loss']:.4f}")
-            print(f"  Final Train Loss: {metrics['final_train_loss']:.4f}")
-    
-    # Fold summary 저장
-    summary_path = os.path.join(config.output_dir, "fold_summary.json")
-    ensemble.save_summary(summary_path)
-    
-    # 테스트 데이터 예측
-    print("\n" + "="*60)
-    print("Evaluating on Test Set...")
-    print("="*60)
-    
-    test_dates, test_loader = data_loader_manager.get_test_loader()
-    
-    if config.ensemble:
-        # 앙상블 예측
-        print(f"\nUsing ensemble method: {config.ensemble_method}")
-        predictions, metadata = ensemble.predict(test_loader, device)
-        
-        # 메타데이터 출력
-        print(f"\nEnsemble metadata:")
-        for key, value in metadata.items():
-            print(f"  {key}: {value}")
-    else:
-        # Best fold만 사용
-        print("\nUsing best fold for prediction")
-        best_fold_idx, _ = select_best_fold(fold_results)
-        
-        key = f'fold_{best_fold_idx}'
-        trainer = fold_results[key]['trainer']
-        predictions, targets = trainer.predict(test_loader)
-        
-        # Quantile prediction인 경우 median 추출
-        if len(predictions.shape) == 3:
-            median_idx = predictions.shape[2] // 2
-            predictions = predictions[:, :, median_idx]
-    
-    # 결과 저장
-    results_path = os.path.join(config.output_dir, "predictions")
-    os.makedirs(results_path, exist_ok=True)
-    
-    # 예측 결과를 DataFrame으로 저장
-    pred_df = pd.DataFrame(
-        predictions,
-        columns=[f'pred_h{h}' for h in config.horizons]
-    )
-    pred_df['date'] = test_dates
-    
-    pred_file = os.path.join(
-        results_path,
-        f"{config.target_commodity}_predictions.csv"
-    )
-    pred_df.to_csv(pred_file, index=False)
-    print(f"\n✓ Predictions saved to {pred_file}")
-    
-    # 해석 가능성 분석
-    if config.compute_feature_importance or config.compute_temporal_importance:
-        print("\n" + "="*60)
-        print("Interpretation Analysis...")
-        print("="*60)
-        
-        # Best fold의 interpretation data 로드
-        best_fold_idx = fold_summary['best_fold']
-        
-        interp_path = Path(config.interpretation_dir) / f'fold_{best_fold_idx}_interpretation.npz'
-        
-        if interp_path.exists():
-            data = np.load(interp_path, allow_pickle=True)
-            
-            # Variable importance
-            if config.compute_feature_importance and 'variable_importance' in data:
-                var_importance = data['variable_importance']
-                
-                if len(var_importance) > 0:
-                    # 가장 최근 epoch의 데이터 사용
-                    var_importance_data = var_importance[-1]
-                    
-                    feature_analyzer = FeatureImportanceAnalyzer(
-                        variable_importance=var_importance_data,
-                        feature_names=feature_names,
-                        horizons=config.horizons
-                    )
-            
-            # Attention weights
-            if config.compute_temporal_importance and 'attention_weights' in data:
-                attn_weights = data['attention_weights']
-                
-                if len(attn_weights) > 0:
-                    # 가장 최근 epoch의 데이터 사용
-                    attn_weights_data = attn_weights[-1]
-                    
-                    attention_analyzer = AttentionAnalyzer(
-                        attention_weights=attn_weights_data,
-                        seq_length=config.seq_length
-                    )
-            
-            # 종합 리포트
-            if config.compute_feature_importance and config.compute_temporal_importance:
-                report = InterpretationReport(
-                    feature_analyzer=feature_analyzer,
-                    attention_analyzer=attention_analyzer,
-                    horizons=config.horizons
-                )
-                
-                # 요약 출력
-                report.print_summary()
-                
-                # 시각화 저장
-                if config.save_attention_weights:
-                    viz_dir = os.path.join(
-                        config.interpretation_dir,
-                        f"{config.target_commodity}_visualizations"
-                    )
-                    report.save_plots(viz_dir)
-        else:
-            print(f"\n⚠️  Interpretation data not found at {interp_path}")
-    
-    print("\n" + "="*60)
-    print("✓ Training and evaluation completed!")
-    print("="*60)
-    print(f"\nOutputs:")
-    print(f"  - Checkpoints: {config.checkpoint_dir}")
-    print(f"  - Predictions: {results_path}")
-    if config.compute_feature_importance or config.compute_temporal_importance:
-        print(f"  - Interpretations: {config.interpretation_dir}")
-    print()
+    print("✅ Training completed!")
+    print(f"{'='*60}")
+    print(f"\n📁 Outputs:")
+    print(f"   Checkpoint: {fold_dir}/best_model.pt")
+    print(f"   Visualizations: {viz_dir}/")
+    print(f"   Interpretations: {interp_dir}/")
+    print(f"   Summary: {summary_path}\n")
 
 
 if __name__ == "__main__":
-    # Parse config from command line
     config = tyro.cli(TrainConfig)
-    
-    # Run main
     main(config)

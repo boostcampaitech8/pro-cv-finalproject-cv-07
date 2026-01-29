@@ -178,66 +178,58 @@ def load_data_with_news(
 def build_tft_dataset(
     time_series: pd.DataFrame,
     seq_length: int,
-    horizons: List[int] = [1, 5, 10, 20],
+    horizons: List[int],
     feature_columns: Optional[List[str]] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
-    """
-    TFT용 데이터셋 생성
-    """
-    # Feature 컬럼 선택
+):
     if feature_columns is None:
         exclude_cols = ['time', 'date']
-        log_return_cols = [col for col in time_series.columns if col.startswith('log_return_')]
-        exclude_cols.extend(log_return_cols)
-        
-        feature_columns = [c for c in time_series.columns if c not in exclude_cols]
-    
-    # 숫자형 컬럼만 선택
-    numeric_columns = time_series[feature_columns].select_dtypes(include=[np.number]).columns.tolist()
-    feature_columns = numeric_columns
-    
-    print(f"Using {len(feature_columns)} features")
-    
-    # 데이터 생성
-    dataX = []
-    dataY = []
-    dataT = []
-    
-    max_horizon = max(horizons)
-    
-    for i in range(len(time_series) - seq_length - max_horizon):
-        # Features
-        _x = time_series.loc[i:i+seq_length-1, feature_columns].values
-        
-        # Targets
-        target_idx = i + seq_length
-        target_columns = [f'log_return_{h}' for h in horizons]
-        
-        if all(col in time_series.columns for col in target_columns):
-            _y = time_series.loc[target_idx, target_columns].values
-        else:
+        exclude_cols += [c for c in time_series.columns if c.startswith('log_return_')]
+        feature_columns = [
+            c for c in time_series.columns
+            if c not in exclude_cols and
+               np.issubdtype(time_series[c].dtype, np.number)
+        ]
+
+    dataX, dataY, dataT = [], [], []
+    max_h = max(horizons)
+
+    for i in range(len(time_series) - seq_length - max_h):
+        x = time_series.iloc[i:i+seq_length][feature_columns].values
+
+        if not np.isfinite(x).all():
             continue
-        
-        # Time
-        _t = time_series.loc[target_idx, 'time']
-        
-        # NaN 체크
-        try:
-            has_nan_x = np.isnan(_x.astype(float)).any()
-            has_nan_y = np.isnan(_y.astype(float)).any()
-            
-            if not has_nan_x and not has_nan_y:
-                dataX.append(_x.astype(np.float32))
-                dataY.append(_y.astype(np.float32))
-                dataT.append(_t)
-        except (ValueError, TypeError):
+
+        target_base = i + seq_length - 1
+
+        y = []
+        valid = True
+
+        for h in horizons:
+            col = f'log_return_{h}'
+            val = time_series.loc[target_base, col]
+
+            if (
+                pd.isna(val)
+                or np.isinf(val)
+                or abs(val) > 1.0      # log_return ±100% 컷
+            ):
+                valid = False
+                break
+
+            y.append(val)
+
+        if not valid:
             continue
-    
-    print(f"Valid samples created: {len(dataX)}")
-    
+
+        t = time_series.loc[target_base, 'time']
+
+        dataX.append(x.astype(np.float32))
+        dataY.append(np.array(y, dtype=np.float32))
+        dataT.append(t)
+
     return (
-        np.array(dataX, dtype=np.float32),
-        np.array(dataY, dtype=np.float32),
+        np.array(dataX),
+        np.array(dataY),
         np.array(dataT),
         feature_columns
     )
