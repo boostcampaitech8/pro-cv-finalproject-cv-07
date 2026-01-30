@@ -48,7 +48,12 @@ def handle_holidays(date_df, df):
     return df
 
 
-def add_price(data, price_df, window_size):
+def add_price(data, price_df, window_size, spans):
+    price_df = price_df.copy()
+    
+    for span in spans:
+        price_df[f'EMA_{span}'] = price_df['close'].ewm(span=span, adjust=False).mean()
+    
     for i in range(len(data)):
         t_idx = price_df[price_df['time'] == data[i]['date']].index
     
@@ -63,18 +68,28 @@ def add_price(data, price_df, window_size):
             continue
 
         window = price_df.iloc[start_idx:end_idx+1]
+
+        data[i]["time"] = window['open'].tolist()
+        data[i]["open"] = window['open'].tolist()
+        data[i]["high"] = window['high'].tolist()
+        data[i]["low"] = window['low'].tolist()
+        data[i]['close'] = window['close'].tolist()
+        data[i]['volume'] = window['Volume'].tolist()
+        
+        for span in spans:
+            data[i][f'EMA_{span}'] = window[f'EMA_{span}'].tolist()
+        
+        
+def add_initial_prompt(data, name, window_size, horizons, spans):
+    selected_columns = ["time", "open", "high", "low", "close"]
+
+    for span in spans:
+        selected_columns.append(f'EMA_{span}')
+        
+    selected_columns.append("volume")
     
-        data[i]["opens"] = window['open'].tolist()
-        data[i]["highs"] = window['high'].tolist()
-        data[i]["lows"] = window['low'].tolist()
-        data[i]['closes'] = window['close'].tolist()
-        data[i]['EMAs'] = window['EMA'].tolist()
-        data[i]['Volumes'] = window['Volume'].tolist()
-        
-        
-def add_initial_prompt(data, name, window_size, horizons):
     for i in range(len(data)):
-        data[i]['initial_prompt'] = f"""Given the past {window_size} timesteps of {name} futures data (columns: open, high, low, close, EMA, Volume),
+        data[i]['initial_prompt'] = f"""Given the past {window_size} timesteps of {name} futures data (columns: {', '.join(selected_columns)}),
 generate a concise query to retrieve relevant news articles that may impact future closing prices.
 
 [Objective]
@@ -82,7 +97,7 @@ The retrieved news will be used as retrieval-augmented context for predicting {n
 {', '.join(["t" if (h-1) == 0 else f"t+{h-1}" for h in horizons])}. Focus on information affecting short- to mid-term price movements.
 
 [Time Series Values]
-open={data[i]["opens"]}, high={data[i]["highs"]}, low={data[i]["lows"]}, close={data[i]["closes"]}, EMA={data[i]["EMAs"]}, Volume={data[i]["Volumes"]}
+{", ".join(f"{col}={data[i][col]}" for col in selected_columns)}
 
 [Instruction]
 Create a short query for news retrieval related to {name} futures.
@@ -150,7 +165,14 @@ def add_relative_news(data, date_list, host, port, top_k=5):
         data[i]["description"] = descriptions
         
 
-def add_final_prompt(data, name, window_size, horizons):
+def add_final_prompt(data, name, window_size, horizons, spans):
+    selected_columns = ["time", "open", "high", "low", "close"]
+
+    for span in spans:
+        selected_columns.append(f'EMA_{span}')
+        
+    selected_columns.append("volume")
+    
     def horizon_key(h):
         h = h - 1
         return "t" if h == 0 else f"t+{h}"
@@ -178,7 +200,7 @@ Your task is to predict future {name} closing prices by jointly considering:
 Predict the closing prices at {", ".join(horizon_key(h) for h in horizons)}.
 
 [Time Series Values] (t-{window_size} to t-1)
-open={data[i]["opens"]}, high={data[i]["highs"]}, low={data[i]["lows"]}, close={data[i]["closes"]}, EMA={data[i]["EMAs"]}, Volume={data[i]["Volumes"]}
+{", ".join(f"{col}={data[i][col]}" for col in selected_columns)}
 
 [Candlestick Chart]
 An image representing the same time window (t-{window_size} to t-1).
@@ -233,6 +255,31 @@ def add_output(data, date_list, price_df, horizons):
     return new_data
 
 
+def add_prev_close(data, date_list, price_df, horizons):
+    offsets = [h-2 for h in horizons]
+    
+    for i in range(len(data)):
+        t_index = date_list.index(data[i]['date'])
+        prev_closes = []
+        
+        for offset in offsets:
+            idx = t_index + offset
+
+            if idx < 0 or idx >= len(date_list):
+                prev_closes.append(None)
+                continue
+
+            prev_date = date_list[idx]
+            row = price_df.loc[price_df['time'] == prev_date, 'close']
+
+            if not row.empty:
+                prev_closes.append(float(row.values[0]))
+            else:
+                prev_closes.append(None)
+                
+        data[i]['prev_close'] = prev_closes
+
+
 def to_chatml(sample):
     return {
         "messages": [
@@ -258,12 +305,12 @@ def to_chatml(sample):
                     }
                 ]
             }
-        ]
+        ],
+        "prev_close": sample["prev_close"]
     }
 
 
-# TODO : 이미지 완성되면 여기 절대 경로 수정해야 함!!
-def train_valid_test_split(data, split_file, index, data_dir, name):    
+def train_valid_test_split(data, split_file, index, data_dir, image_dir):    
     train_dates = split_file['folds'][index]['train']['t_dates']
     valid_dates =  split_file['folds'][index]['val']['t_dates']
     test_dates = split_file['meta']['fixed_test']['t_dates']
@@ -274,17 +321,20 @@ def train_valid_test_split(data, split_file, index, data_dir, name):
 
     for i in range(len(data)):
         if data[i]['date'] in train_dates:
-            train.append({'image': f'/data/ephemeral/home/outputs/{name}/{data[i]["date"]}.png',
+            train.append({'image': os.path.join(image_dir, f"{data[i]['date']}.png"),
                           'prompt': data[i]['final_prompt'],
-                          'output': data[i]['output']})
+                          'output': data[i]['output'],
+                          'prev_close': data[i]['prev_close']})
         elif data[i]['date'] in valid_dates:
-            valid.append({'image': f'/data/ephemeral/home/outputs/{name}/{data[i]["date"]}.png',
+            valid.append({'image': os.path.join(image_dir, f"{data[i]['date']}.png"),
                           'prompt': data[i]['final_prompt'],
-                          'output': data[i]['output']})
+                          'output': data[i]['output'],
+                          'prev_close': data[i]['prev_close']})
         elif data[i]['date'] in test_dates:
-            test.append({'image': f'/data/ephemeral/home/outputs/{name}/{data[i]["date"]}.png',
+            test.append({'image': os.path.join(image_dir, f"{data[i]['date']}.png"),
                          'prompt': data[i]['final_prompt'],
-                         'output': data[i]['output']})
+                         'output': data[i]['output'],
+                         'prev_close': data[i]['prev_close']})
 
     with open(os.path.join(data_dir, "preprocessing/train.jsonl"), "w", encoding="utf-8") as f:
         for sample in train:
