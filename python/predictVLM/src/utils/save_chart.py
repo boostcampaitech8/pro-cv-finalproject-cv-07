@@ -170,10 +170,17 @@ def generate_images(
                     continue
 
                 # EMA addplot 생성 (여러 개 가능)
+                # EMA 기간별 색상: 5일(갈색), 10일(금색), 20일(파란색)
+                ema_colors = {
+                    5: '#ef5714',   # 갈색
+                    10: '#FFD700',  # 금색
+                    20: 'blue',     # 파란색
+                }
                 addplots = []
                 for ema in emas:
                     ema_col = f"EMA_{ema}"
-                    addplots.append(mpf.make_addplot(df_win[ema_col], color='#ef5714', width=2.0))
+                    color = ema_colors.get(ema, '#ef5714')  # 기본값은 갈색
+                    addplots.append(mpf.make_addplot(df_win[ema_col], color=color, width=2.0))
 
                 # Plot kwargs
                 plot_kwargs = dict(
