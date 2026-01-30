@@ -8,6 +8,7 @@ import pandas as pd
 import json
 import boto3
 from tqdm import tqdm
+from copy import deepcopy
 
 
 def filtering_price(df):
@@ -208,12 +209,12 @@ An image representing the same time window (t-{window_size} to t-1).
 [Related News Articles]
 {article}
 [Output Format]
-Return a JSON object with exactly four fields:
-{{
-  {output_fields}
-}}
+Return a Python dictionary with exactly the following keys and float values:
+{
+  {", ".join(f"{horizon_key(h)}: float" for h in horizons)}
+}
 
-Output only valid JSON. No additional text."""
+Output only the dictionary. No additional text."""
 
 
 def add_output(data, date_list, price_df, horizons):
@@ -249,7 +250,7 @@ def add_output(data, date_list, price_df, horizons):
             else:
                 output_dict[f"t+{h}"] = float(v)
         
-        data[i]['output'] = json.dumps(output_dict)
+        data[i]['output'] = str(output_dict)
         new_data.append(data[i])
     
     return new_data
@@ -350,3 +351,30 @@ def train_valid_test_split(data, split_file, index, data_dir, image_dir):
         for sample in test:
             chatml = to_chatml(sample)
             f.write(json.dumps(chatml, ensure_ascii=False) + "\n")
+            
+
+def preprocess_messages(messages, processor, include_assistant=True, add_eos=False):
+    msgs = deepcopy(messages)
+    
+    if not include_assistant:
+        msgs = [m for m in msgs if m["role"] != "assistant"]
+
+    processed = []
+    for msg in msgs:
+        safe_content = []
+        for c in msg["content"]:
+            if c.get("type") == "image" and c.get("image"):
+                safe_content.append({"type": "image", "image": c["image"]})
+            elif c.get("type") == "text" and c.get("text"):
+                safe_content.append({"type": "text", "text": c["text"]})
+
+        msg["content"] = safe_content
+
+        if include_assistant and msg["role"] == "assistant" and add_eos:
+            text_idxs = [i for i, c in enumerate(msg["content"]) if c["type"] == "text"]
+            if text_idxs:
+                msg["content"][text_idxs[-1]]["text"] = "<|assistant|> " + msg["content"][text_idxs[-1]]["text"] + processor.tokenizer.eos_token
+
+        processed.append(msg)
+
+    return processed

@@ -12,5 +12,10 @@ class TrainConfig:
     ema_spans: List[int] = field(default_factory=lambda: [5, 20])
     horizons: int = 20
     fold: int = 7
+    
+    checkpoint_dir: str = "./predictVLM/src/outputs/checkpoints"
+    output_dir: str = "./predictVLM/src/outputs"
+    
+    best_epoch: int = -1
 
     seed: int = 42
