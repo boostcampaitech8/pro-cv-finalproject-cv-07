@@ -70,7 +70,7 @@ def add_price(data, price_df, window_size, spans):
 
         window = price_df.iloc[start_idx:end_idx+1]
 
-        data[i]["time"] = window['open'].tolist()
+        data[i]["time"] = window['time'].tolist()
         data[i]["open"] = window['open'].tolist()
         data[i]["high"] = window['high'].tolist()
         data[i]["low"] = window['low'].tolist()
@@ -177,10 +177,6 @@ def add_final_prompt(data, name, window_size, horizons, spans):
     def horizon_key(h):
         h = h - 1
         return "t" if h == 0 else f"t+{h}"
-    
-    output_fields = ",\n  ".join(
-        f"\"{horizon_key(h)}\": float" for h in horizons
-    )
           
     for i in range(len(data)):
         article = ""
