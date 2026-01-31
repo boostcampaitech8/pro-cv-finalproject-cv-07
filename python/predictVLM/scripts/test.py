@@ -9,9 +9,8 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
+    Qwen2_5_VLConfig,
     AutoProcessor,
-    TrainingArguments,
-    Trainer
 )
 from peft import PeftModel
 from datasets import load_dataset
@@ -26,17 +25,26 @@ def main(cfg: TrainConfig):
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         MODEL_ID, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True
     )
+    
+    Qwen2_5_VLConfig.vocab_size = 152064
+    model.config.vocab_size = 152064
+    
     if cfg.best_epoch == -1:
         print("best epoch 설정 필요")
         return
     else:
-        model = PeftModel.from_pretrained(model, os.path.join(cfg.checkpoint_dir, f"{cfg.best_epoch}epoch"), torch_dtype=torch.float16)
+        model = PeftModel.from_pretrained(model, os.path.join(cfg.checkpoint_dir, f"{cfg.best_epoch}epoch/checkpoint-192"), torch_dtype=torch.float16)
 
     min_pixels = 32*28*28
     max_pixels = 64*28*28
     processor = AutoProcessor.from_pretrained(
         MODEL_ID, min_pixels=min_pixels, max_pixels=max_pixels, trust_remote_code=True
     )
+    
+    if "<|assistant|>" not in processor.tokenizer.get_vocab():
+        processor.tokenizer.add_special_tokens({"additional_special_tokens": ["<|assistant|>"]})
+    model.resize_token_embeddings(152064)
+    setattr(Qwen2_5_VLConfig, "vocab_size", 152064)
     
     dataset = load_dataset(
         "json",

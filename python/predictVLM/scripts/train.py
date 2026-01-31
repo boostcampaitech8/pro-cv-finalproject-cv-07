@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
+    Qwen2_5_VLConfig,
     AutoProcessor,
-    AutoConfig,
     TrainingArguments,
     Trainer
 )
@@ -24,15 +24,15 @@ def main(cfg: TrainConfig):
     MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    config = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
-    config.vocab_size = 152064 
-    config.use_cache = False
-
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        MODEL_ID, config=config, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True
+        MODEL_ID, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True
     )
     
+    Qwen2_5_VLConfig.vocab_size = 152064
+    model.config.vocab_size = 152064
+    
     # OOM 방지용
+    model.config.use_cache = False
     model.enable_input_require_grads()
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
@@ -46,6 +46,7 @@ def main(cfg: TrainConfig):
     if "<|assistant|>" not in processor.tokenizer.get_vocab():
         processor.tokenizer.add_special_tokens({"additional_special_tokens": ["<|assistant|>"]})
     model.resize_token_embeddings(152064)
+    setattr(Qwen2_5_VLConfig, "vocab_size", 152064)
 
     # LoRA config
     lora_config = LoraConfig(
