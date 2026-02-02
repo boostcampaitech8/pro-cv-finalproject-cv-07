@@ -19,7 +19,7 @@ def validate(model, processor, val_loader, horizons, device="cuda"):
         for batch in tqdm(val_loader, desc="Validating", total=len(val_loader)):
             inputs = batch["model_inputs"].to(device)
 
-            generated_ids = model.generate(**inputs, max_new_tokens=350)
+            generated_ids = model.generate(**inputs, max_new_tokens=350, do_sample=False)
             generated_ids_trimmed = [
                 out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
