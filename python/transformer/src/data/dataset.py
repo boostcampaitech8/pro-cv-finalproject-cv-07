@@ -8,7 +8,7 @@ def build_dataset(time_series, seq_length, horizons=[1, 5, 10, 20]):
     dataT = []
     for i in range(0, len(time_series) - seq_length):
         
-        _x = time_series.loc[i:i+seq_length-1, [c for c in time_series.columns if c != 'time']].values
+        _x = time_series.loc[i:i+seq_length-1, [c for c in time_series.columns if (c != 'time') and (not c.startswith('log_return'))]].values
         _y = time_series.loc[i+seq_length, [f'log_return_{h}' for h in horizons]]
         _t = time_series.loc[i+seq_length, 'time']
 
