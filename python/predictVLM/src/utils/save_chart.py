@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument(
         "--data-path",
         type=str,
-        default="../../data/corn_future_price.csv",
+        default="shared/datasets/corn_future_price.csv",
         help="Path to the CSV file containing price data"
     )
     parser.add_argument(
@@ -65,7 +65,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="images",
+        default="shared/datasets/images",
         help="Base output directory for images"
     )
     parser.add_argument(

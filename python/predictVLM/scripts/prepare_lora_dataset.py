@@ -8,7 +8,8 @@ from predictVLM.src.data.preprocessing import (
     add_relative_news,
     add_final_prompt,
     add_output,
-    train_valid_test_split
+    train_valid_test_split,
+    add_prev_close
 )
 
 import os
@@ -32,14 +33,18 @@ def main(cfg: TrainConfig):
         date_list = sorted(price_df['time'].unique())
         valid_date_list = sorted(filtering_price(price_df)['time'].unique())
         data = [{"date": d} for d in valid_date_list]
+        
+        # horizons 설정
+        horizons = [i + 1 for i in range(cfg.horizons)]
     
         # data 추가
-        add_price(data, price_df, cfg.seq_length)
-        add_initial_prompt(data, cfg.name, cfg.seq_length, cfg.horizons)
+        add_price(data, price_df, cfg.seq_length, cfg.ema_spans)
+        add_initial_prompt(data, cfg.name, cfg.seq_length, horizons, cfg.ema_spans)
         add_embedding(data, os.getenv('AWS_ACCESS_KEY_ID'), os.getenv('AWS_SECRET_ACCESS_KEY'))
         add_relative_news(data, date_list, os.getenv('VECTOR_DB_HOST'), os.getenv('VECTOR_DB_PORT'))
-        add_final_prompt(data, cfg.name, cfg.seq_length, cfg.horizons)
-        data = add_output(data, date_list, price_df, cfg.horizons)
+        add_final_prompt(data, cfg.name, cfg.seq_length, horizons, cfg.ema_spans)
+        data = add_output(data, date_list, price_df, horizons)
+        add_prev_close(data, date_list, price_df, horizons)
     
         # 저장
         os.makedirs(os.path.join(cfg.data_dir, "preprocessing"), exist_ok=True)
@@ -50,7 +55,7 @@ def main(cfg: TrainConfig):
     with open(os.path.join(cfg.data_dir, 'rolling_fold.json'), 'r') as file:
         split_file = json.load(file)
     
-    train_valid_test_split(data, split_file, cfg.fold, cfg.data_dir, cfg.name)
+    train_valid_test_split(data, split_file, cfg.fold, cfg.data_dir, cfg.image_dir)
     
 
 if __name__ == "__main__":
