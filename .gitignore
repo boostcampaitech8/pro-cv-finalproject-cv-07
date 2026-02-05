@@ -1,5 +1,7 @@
 python/src/datasets/
 *outputs/
 python/scripts/lightning_logs
+_archive/
+*.patch
 
 __pycache__/
