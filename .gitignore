@@ -4,4 +4,10 @@ python/scripts/lightning_logs
 _archive/
 *.patch
 
+# CLI artifacts (argparse leftovers)
+python/--*
+
+# accidental experiment directories
+scripts/
+
 __pycache__/
