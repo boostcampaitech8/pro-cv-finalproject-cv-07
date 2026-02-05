@@ -28,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--device", type=str, default="")
     parser.add_argument("--save_gradcam", action="store_true")
+    parser.add_argument(
+        "--gradcam_stage",
+        type=int,
+        default=None,
+        help="ConvNeXt stage index for Grad-CAM (e.g., -3 for higher resolution).",
+    )
 
     return parser.parse_args()
 
@@ -50,6 +56,7 @@ def main() -> None:
         num_workers=args.num_workers,
         device=args.device or None,
         save_gradcam=args.save_gradcam,
+        gradcam_stage=args.gradcam_stage,
     )
 
     print(f"Inference JSON saved to: {results_root}")

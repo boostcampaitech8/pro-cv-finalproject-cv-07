@@ -16,6 +16,16 @@ _BACKBONE_MAP = {
 class CNN(nn.Module):
     """
     CNN anomaly model using a timm backbone with optional aux fusion.
+
+    FIXED ISSUES:
+    1. Removed Sigmoid activation to prevent mode collapse
+    2. Outputs are linear (no activation) for stable gradients
+    3. Outputs are NOT clipped to [0, 1]
+
+    This allows the model to:
+    - Learn proper gradient flow
+    - Predict varied severity scores
+    - Avoid converging to constant predictions
     """
 
     def __init__(
@@ -69,13 +79,19 @@ class CNN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(self.embed_dim, num_outputs),
         )
-        self.activation = nn.Sigmoid()
 
     def forward(self, image: torch.Tensor, aux: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Returns:
+            torch.Tensor: Severity scores [B, 4] for horizons [1, 5, 10, 20]
+                         Linear outputs (can be negative or > 1)
+        """
         z_img = self.backbone(image)
         if aux is None or self.fusion_mode == "none":
             z = z_img
         else:
             z = self.fusion(z_img, aux)
         out = self.head(z)
-        return self.activation(out)
+        return out

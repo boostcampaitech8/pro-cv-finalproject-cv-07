@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -29,6 +30,49 @@ def _collect_raw_returns(dataset) -> Optional[np.ndarray]:
     if hasattr(dataset, "anchor_returns"):
         return np.asarray(dataset.anchor_returns, dtype=np.float32)
     return None
+
+
+def _sanitize_for_json(obj):
+    if isinstance(obj, (float, np.floating)):
+        if not np.isfinite(obj):
+            return None
+        return float(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
+def _build_binary_labels(
+    dataset,
+    threshold_key: str,
+) -> Optional[np.ndarray]:
+    raw_returns = _collect_raw_returns(dataset)
+    if raw_returns is None:
+        return None
+    thresholds = getattr(dataset, threshold_key, None)
+    if thresholds is None:
+        return None
+    thresholds = np.asarray(thresholds, dtype=np.float32)
+    return (raw_returns >= thresholds).astype(int)
+
+
+def _compute_pos_stats(y_true: np.ndarray) -> Dict[str, Dict[str, float]]:
+    stats: Dict[str, Dict[str, float]] = {}
+    for idx, horizon in enumerate([1, 5, 10, 20]):
+        labels = y_true[:, idx]
+        pos_count = int(labels.sum())
+        total = int(labels.shape[0])
+        pos_rate = float(pos_count / total) if total > 0 else 0.0
+        stats[str(horizon)] = {
+            "pos_count": pos_count,
+            "total": total,
+            "pos_rate": pos_rate,
+        }
+    return stats
 
 
 def evaluate_cnn(
@@ -74,21 +118,19 @@ def evaluate_cnn(
     preds = torch.cat(all_preds, dim=0).numpy()
     targets = torch.cat(all_targets, dim=0).numpy()
 
-    raw_returns = _collect_raw_returns(dataloader.dataset)
-    if raw_returns is None or raw_returns.shape[0] != preds.shape[0]:
-        y_true_high = (targets >= 1.0).astype(int)
-    else:
-        q95 = np.asarray(dataloader.dataset.q95, dtype=np.float32)
-        y_true_high = (raw_returns >= q95).astype(int)
+    # q95 labels (primary)
+    y_true_q95 = _build_binary_labels(dataloader.dataset, "q95")
+    if y_true_q95 is None or y_true_q95.shape[0] != preds.shape[0]:
+        y_true_q95 = (targets >= 1.0).astype(int)
 
     metrics = compute_metrics_per_horizon(
-        y_true_high,
+        y_true_q95,
         preds,
         threshold=threshold,
         best_threshold=best_threshold,
     )
     metrics_best = compute_metrics_per_horizon(
-        y_true_high,
+        y_true_q95,
         preds,
         threshold=threshold,
         best_threshold=True,
@@ -97,8 +139,30 @@ def evaluate_cnn(
         metrics[horizon]["f1_best"] = metrics_best[horizon]["f1"]
         metrics[horizon]["best_threshold"] = metrics_best[horizon]["threshold"]
 
+    # Optional: q90/q80 metrics for reference
+    extra_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for label_name in ("q90", "q80"):
+        y_true = _build_binary_labels(dataloader.dataset, label_name)
+        if y_true is None or y_true.shape[0] != preds.shape[0]:
+            continue
+        extra_metrics[label_name] = compute_metrics_per_horizon(
+            y_true,
+            preds,
+            threshold=threshold,
+            best_threshold=best_threshold,
+        )
+        extra_best = compute_metrics_per_horizon(
+            y_true,
+            preds,
+            threshold=threshold,
+            best_threshold=True,
+        )
+        for horizon in extra_metrics[label_name]:
+            extra_metrics[label_name][horizon]["f1_best"] = extra_best[horizon]["f1"]
+            extra_metrics[label_name][horizon]["best_threshold"] = extra_best[horizon]["threshold"]
+
     avg_loss = float(np.mean(losses)) if losses else float("nan")
-    return avg_loss, metrics
+    return avg_loss, metrics, extra_metrics, _compute_pos_stats(y_true_q95)
 
 
 def train_cnn(
@@ -118,6 +182,8 @@ def train_cnn(
     threshold: float = 0.5,
     best_threshold: bool = False,
     best_metric: str = "auprc",
+    min_epochs: int = 20,
+    freeze_backbone_epochs: int = 0,
 ) -> Dict[str, Dict[str, float]]:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,12 +196,26 @@ def train_cnn(
 
     model.to(device)
 
+    def _set_backbone_trainable(trainable: bool) -> None:
+        backbone = getattr(model, "backbone", None)
+        if backbone is None:
+            return
+        for param in backbone.parameters():
+            param.requires_grad = trainable
+
+    if freeze_backbone_epochs > 0:
+        _set_backbone_trainable(False)
+
     epochs_without_improve = 0
 
     with log_path.open("w", encoding="utf-8") as log_file:
         for epoch in range(1, epochs + 1):
+            if freeze_backbone_epochs > 0 and epoch == freeze_backbone_epochs + 1:
+                _set_backbone_trainable(True)
+
             model.train()
             train_losses: List[float] = []
+            train_preds: List[float] = []
 
             for batch in train_loader:
                 images = batch["image"].to(device)
@@ -158,10 +238,12 @@ def train_cnn(
                 optimizer.step()
 
                 train_losses.append(loss.item())
+                train_preds.extend(outputs.detach().cpu().numpy().flatten().tolist())
 
             train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
+            train_pred_std = float(np.std(train_preds)) if train_preds else 0.0
 
-            val_loss, val_metrics = evaluate_cnn(
+            val_loss, val_metrics, val_extra, val_pos_stats = evaluate_cnn(
                 model,
                 val_loader,
                 loss_fn,
@@ -173,16 +255,27 @@ def train_cnn(
             )
 
             summary = summarize_metrics(val_metrics) if val_metrics else {}
-            score = summary.get("mean_auprc", float("nan"))
-            if best_metric == "loss":
-                score = -val_loss
-            if not np.isfinite(score):
-                score = -val_loss
+            if best_metric == "auprc":
+                score = summary.get("mean_auprc", float("nan"))
+            elif best_metric == "loss":
+                score = -val_loss if np.isfinite(val_loss) else float("nan")
+            else:
+                score = summary.get(f"mean_{best_metric}", float("nan"))
 
-            if best_state is None or score > best_score:
+            if not np.isfinite(score):
+                score = -val_loss if np.isfinite(val_loss) else float("-inf")
+
+            improved = False
+            if best_state is None:
+                improved = True
+            elif np.isfinite(score) and score > best_score:
+                improved = True
+
+            if improved:
                 best_score = score
                 best_state = {
                     "model_state_dict": model.state_dict(),
+                    "epoch": epoch,
                 }
                 best_metrics = val_metrics
                 best_epoch = epoch
@@ -194,26 +287,39 @@ def train_cnn(
             log_entry = {
                 "epoch": epoch,
                 "train_loss": train_loss,
+                "train_pred_std": train_pred_std,
                 "val_loss": val_loss,
                 "val_metrics": val_metrics,
                 "summary": summary,
+                "pos_stats": val_pos_stats,
+                "extra_metrics": val_extra,
                 "best_epoch": best_epoch,
-                "best_score": best_score,
+                "best_score": best_score if np.isfinite(best_score) else None,
                 "early_stop_counter": epochs_without_improve,
                 "early_stop_patience": early_stop_patience,
+                "min_epochs": min_epochs,
+                "freeze_backbone_epochs": freeze_backbone_epochs,
             }
-            log_file.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            log_file.write(json.dumps(_sanitize_for_json(log_entry), ensure_ascii=False) + "\n")
+            log_file.flush()
 
+            mean_auprc = summary.get("mean_auprc", float("nan"))
             print(
                 f"Epoch {epoch:03d} | "
-                f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | "
-                f"Val mAUPRC: {summary.get('mean_auprc', float('nan')):.4f}"
+                f"Train: {train_loss:.4f} (std={train_pred_std:.4f}) | "
+                f"Val: {val_loss:.4f} | "
+                f"mAUPRC: {mean_auprc:.4f} | "
+                f"Best@{best_epoch} ({best_score:.4f}) | "
+                f"NoImprove: {epochs_without_improve}/{early_stop_patience}"
             )
+
+            if epoch < min_epochs:
+                continue
 
             if early_stop_patience > 0 and epochs_without_improve >= early_stop_patience:
                 print(
                     f"Early stopping triggered at epoch {epoch} "
-                    f"(no improvement for {early_stop_patience} epochs)."
+                    f"(no improvement for {early_stop_patience} epochs after {min_epochs} min epochs)."
                 )
                 break
 
@@ -225,7 +331,11 @@ def train_cnn(
         "summary": summarize_metrics(best_metrics) if best_metrics else {},
         "best_epoch": best_epoch,
     }
+    if best_metrics:
+        final_metrics["pos_stats"] = val_pos_stats
+    if val_extra:
+        final_metrics["extra_metrics"] = val_extra
     with metrics_path.open("w", encoding="utf-8") as f:
-        json.dump(final_metrics, f, ensure_ascii=False, indent=2)
+        json.dump(_sanitize_for_json(final_metrics), f, ensure_ascii=False, indent=2)
 
     return best_metrics

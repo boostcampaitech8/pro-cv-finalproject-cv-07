@@ -42,6 +42,13 @@ def parse_args() -> argparse.Namespace:
         choices=["auprc", "loss"],
         default="auprc",
     )
+    parser.add_argument("--min_epochs", type=int, default=20)
+    parser.add_argument(
+        "--freeze_backbone_epochs",
+        type=int,
+        default=0,
+        help="Freeze backbone for N initial epochs (head-only warmup).",
+    )
     parser.add_argument("--horizon_weights", type=float, nargs=4, default=[1.0, 1.0, 1.0, 1.0])
     parser.add_argument("--severity_loss_weight", type=float, default=1.0)
 
@@ -165,6 +172,8 @@ def main() -> None:
         log_path=log_path,
         metrics_path=metrics_path,
         best_metric=args.early_stop_metric,
+        min_epochs=args.min_epochs,
+        freeze_backbone_epochs=args.freeze_backbone_epochs,
     )
 
     print(f"Training complete. Checkpoint saved to: {checkpoint_path}")

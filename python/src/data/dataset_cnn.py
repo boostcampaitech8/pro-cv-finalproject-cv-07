@@ -308,9 +308,13 @@ class CNNDataset(Dataset):
         return q80, q90, q95
 
     def _build_severity(self, returns: np.ndarray) -> torch.Tensor:
-        denom = np.maximum(self.q95 - self.q80, 1e-8)
-        severity = np.clip((returns - self.q80) / denom, 0.0, 1.0)
-        return torch.from_numpy(severity.astype(np.float32))
+        """
+        Build severity targets using raw log returns.
+
+        Using raw abs log returns avoids distortion from extra normalization
+        and keeps target scale consistent with the actual returns.
+        """
+        return torch.from_numpy(returns.astype(np.float32))
 
     def _load_image(self, date_str: str) -> torch.Tensor:
         if self.image_mode == "stack":

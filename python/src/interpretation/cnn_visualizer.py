@@ -259,6 +259,12 @@ def plot_fusion_contribution(
 class GradCAM:
     """
     Lightweight Grad-CAM helper for CNN interpretability.
+
+    FIXED ISSUES:
+    1. Hooks re-registered for each generate() call
+    2. Activations/gradients reset each time
+    3. Hook cleanup to prevent memory leaks
+    4. Per-sample normalization
     """
 
     def __init__(self, model: torch.nn.Module, target_layer: torch.nn.Module) -> None:
@@ -266,16 +272,26 @@ class GradCAM:
         self.target_layer = target_layer
         self._activations = None
         self._gradients = None
+        self._handles = []
+
+    def _clear_hooks(self) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles.clear()
 
     def _register_hooks(self) -> None:
+        self._clear_hooks()
+
         def forward_hook(_, __, output):
-            self._activations = output
+            self._activations = output.detach()
 
         def backward_hook(_, grad_input, grad_output):
-            self._gradients = grad_output[0]
+            self._gradients = grad_output[0].detach()
 
-        self.target_layer.register_forward_hook(forward_hook)
-        self.target_layer.register_full_backward_hook(backward_hook)
+        handle_fwd = self.target_layer.register_forward_hook(forward_hook)
+        handle_bwd = self.target_layer.register_full_backward_hook(backward_hook)
+        self._handles.append(handle_fwd)
+        self._handles.append(handle_bwd)
 
     def generate(
         self,
@@ -286,24 +302,33 @@ class GradCAM:
         """
         Generate a Grad-CAM heatmap for a given input tensor.
         """
-        if self._activations is None or self._gradients is None:
-            self._register_hooks()
+        self._activations = None
+        self._gradients = None
+        self._register_hooks()
 
         self.model.zero_grad()
+        input_tensor.requires_grad_(True)
         outputs = self.model(input_tensor, aux)
 
         if class_idx is None:
             class_idx = int(outputs.argmax(dim=1)[0])
 
         score = outputs[:, class_idx].sum()
-        score.backward(retain_graph=True)
+        score.backward(retain_graph=False)
 
         if self._activations is None or self._gradients is None:
-            raise RuntimeError("Grad-CAM hooks did not capture activations/gradients.")
+            raise RuntimeError(
+                "Grad-CAM hooks did not capture activations/gradients."
+            )
 
         weights = self._gradients.mean(dim=(2, 3), keepdim=True)
         cam = (weights * self._activations).sum(dim=1)
         cam = torch.relu(cam)
-        cam = cam - cam.min()
-        cam = cam / (cam.max() + 1e-8)
+        cam_min = cam.amin(dim=(1, 2), keepdim=True)
+        cam_max = cam.amax(dim=(1, 2), keepdim=True)
+        cam = (cam - cam_min) / (cam_max - cam_min + 1e-8)
+        self._clear_hooks()
         return cam
+
+    def __del__(self) -> None:
+        self._clear_hooks()
