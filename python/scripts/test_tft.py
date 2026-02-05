@@ -194,7 +194,8 @@ def main(config: TrainConfig):
         
         for fold in config.fold:
             # ===== 폴더 구조 맞춤 =====
-            fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}"
+            h_tag = "h" + "-".join(map(str, config.horizons))
+            fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}_{h_tag}"
             checkpoint_path = fold_dir / "best_model.pt"
             viz_dir = fold_dir / "visualizations"
             

@@ -53,72 +53,35 @@ def test_split(X, Y, T, split_file):
 
 
 
-def deepar_split(df, split_file, fold_idx):
+def deepar_split(df, split_file, fold_idx, time_col="time"):
     with open(split_file, "r") as f:
         data = json.load(f)
+    train_dates = pd.to_datetime(data['folds'][fold_idx]['train']['t_dates'])
+    valid_dates = pd.to_datetime(data['folds'][fold_idx]['val']['t_dates'])
 
-    train_dates = set(str(d)[:10] for d in data["folds"][fold_idx]["train"]["t_dates"])
-    val_dates   = set(str(d)[:10] for d in data["folds"][fold_idx]["val"]["t_dates"])
-
-    df = df.copy()
-    df["date_str"] = df["time"].astype(str).str[:10]
-
-    train_df = df[df["date_str"].isin(train_dates)].drop(columns="date_str")
-    val_df   = df[df["date_str"].isin(val_dates)].drop(columns="date_str")
     
-    train_df = (
-        train_df
-        .sort_values(["item_id", "time"])
-        .reset_index(drop=True)
-    )
-    train_df["time"] = train_df.groupby("item_id").cumcount()
-
-    val_df = (
-        val_df
-        .sort_values(["item_id", "time"])
-        .reset_index(drop=True)
-    )
-    val_df["time"] = val_df.groupby("item_id").cumcount()
-
+    val_dates = pd.to_datetime(data["folds"][fold_idx]["val"]["t_dates"])
+    val_start = val_dates.min()
+    train_df = df[df["time"].isin(train_dates)].reset_index(drop=True)
+    val_df   = df[df["time"].isin(valid_dates)].reset_index(drop=True)
     return train_df, val_df
 
 
+def lag_features_by_1day(df: pd.DataFrame, feature_cols, group_col="item_id", time_col="time"):
+    df = df.sort_values([group_col, time_col]).copy()
 
+    # df에 실제 존재하는 컬럼만 선택
+    existing_cols = [c for c in feature_cols if c in df.columns]
 
-# def build_multi_item_dataset(dfs, target_col, feature_cols):
-#     all_dfs = []
-#     min_len = min(len(df) for df in dfs.values())
-#     for item_id, df in dfs.items():
-#         df = df.copy()
-#         #df = df.iloc[-min_len:]
+    # feature_cols만 1일 lag (누수 방지)
+    df[existing_cols] = df.groupby(group_col)[existing_cols].shift(1)
+    is_first = df.groupby(group_col).cumcount() == 0
+    df = df.loc[~is_first].reset_index(drop=True)
 
-#         # 필수 컬럼 체크
-#         assert "item_id" in df.columns, f"{item_id}: item_id missing"
-#         assert target_col in df.columns, f"{item_id}: target missing"
+    # lag로 생긴 NaN 제거(첫 날)
+    #df = df.dropna(subset=existing_cols).reset_index(drop=True)
+    return df
 
-    
-#         # 필요한 컬럼만 선택
-#         keep_cols = ["time", "item_id", target_col] + feature_cols
-#         df = df[keep_cols]
-
-#         all_dfs.append(df)
-#         print(f"Item: {item_id}, Target: {len(df.values)}")
-
-#     # multi-item concat
-#     long_df = pd.concat(all_dfs, ignore_index=True)
-
-#     # PandasDataset 생성
-#     dataset = PandasDataset.from_long_dataframe(
-#         long_df,
-#         item_id="item_id",
-#         timestamp="time",
-#         target=target_col,
-#         freq=None,   # ← 숫자 index일 때는 None이 안전
-#         feat_dynamic_real=feature_cols,
-#     )
-    
-
-#     return dataset
 
 
 def build_multi_item_dataset(dfs, target_col, feature_cols):
@@ -131,27 +94,28 @@ def build_multi_item_dataset(dfs, target_col, feature_cols):
         assert "item_id" in df.columns, f"{item_id}: item_id missing"
         assert target_col in df.columns, f"{item_id}: target missing"
 
-        # 존재하는 feature만 선택
-        existing_features = [c for c in feature_cols if c in df.columns]
+        print(f"Item: {item_id}, rows={len(df)}, n_feat={len(feature_cols)}")
+        #existing_features = [c for c in feature_cols if c in df.columns]
 
-        # 필요한 컬럼만 선택
-        keep_cols = ["time", "item_id", target_col] + existing_features
-        df = df[keep_cols]
+        
+       
 
         all_dfs.append(df)
-        print(f"Item: {item_id}, Target: {len(df.values)}, Features used: {len(existing_features)}")
+      
 
     # multi-item concat
     long_df = pd.concat(all_dfs, ignore_index=True)
+    
+    long_df = long_df.sort_values(["item_id", "time_idx"]).reset_index(drop=True)
 
     # PandasDataset 생성
     dataset = PandasDataset.from_long_dataframe(
         long_df,
         item_id="item_id",
-        timestamp="time",
+        timestamp="time_idx",
         target=target_col,
-        freq=None,   # 숫자 index일 때는 None이 안전
-        feat_dynamic_real=existing_features,
+        freq="D",  
+        feat_dynamic_real=feature_cols,
     )
 
     return dataset

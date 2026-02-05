@@ -6,11 +6,11 @@ def add_log_return_feature(df, horizons):
     df = df.copy()
     
     for h in horizons:
-        df[f'log_return_{h}'] = np.log(df['close'].shift(-(h-1)) / df['close'].shift(1))
+        df[f"log_return_{h}"] = np.log(df["close"].shift(-h) / df["close"])
     
     return df
 
-
+# open(t) , log_return(t-1),ema(t)
 def add_ema_features(df, spans=[5, 10, 20, 50, 100]):
     df = df.copy()
     

@@ -125,7 +125,7 @@ def main(config: TrainConfig):
                 criterion = nn.MSELoss()
             
             # Train!
-            model, train_hist, valid_hist, best_metrics = train(
+            model, train_hist, valid_hist, best_metrics, best_epoch, best_val_loss = train(
                 model, train_loader, valid_loader,
                 criterion, optimizer, device,
                 num_epochs=config.epochs,
@@ -189,13 +189,12 @@ def main(config: TrainConfig):
                 if all_var_importance:
                     var_importance = np.concatenate(all_var_importance, axis=0).mean(axis=0)
                     interp_data['variable_importance'] = var_importance
-                
-                interp_data = {}
 
-                if hasattr(model, 'attention_history'):
-                    attn = np.array(model.attention_history)  
-                    # shape: [epochs, batch, heads, seq, seq]
-                    interp_data['attention_weights'] = attn
+                if all_attn_weights and config.compute_temporal_importance:
+                    # all_attn_weights: List of [batch, heads, seq, seq]
+                    attn = np.concatenate(all_attn_weights, axis=0)  # [N, H, T, T]
+                    avg_attn = attn.mean(axis=(0, 1))  # [T, T]
+                    interp_data['attention_weights'] = avg_attn
                 
                 if interp_data:
                     interp_path = interp_dir / "interpretation_data.npz"
@@ -240,8 +239,8 @@ def main(config: TrainConfig):
             # Fold summary
             if best_metrics:
                 fold_summary = {
-                    'best_epoch': len(train_hist),
-                    'best_valid_loss': float(valid_hist.min()),
+                    'best_epoch': int(best_epoch),
+                    'best_valid_loss': float(best_val_loss),
                     'final_train_loss': float(train_hist[-1]),
                     'mae_overall': float(best_metrics['mae_overall']),
                     'rmse_overall': float(best_metrics['rmse_overall']),

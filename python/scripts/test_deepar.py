@@ -134,8 +134,7 @@ def main(cfg: TrainConfig):
             dfs, f"log_return_{h}", feature_cols
         )
 
-        # ===== 모델 불러오기 =====
-        # 학습된 모델 경로 (fold=0 기준)
+    # ===== 모델 불러오기 =  ====
         model_path = Path(cfg.checkpoint_dir) / f"deepar_full_h{h}"
         
         if not model_path.exists():

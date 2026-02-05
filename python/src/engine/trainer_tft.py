@@ -8,6 +8,16 @@ import numpy as np
 import copy
 from tqdm import tqdm
 
+def pick_point_pred(preds, quantiles=None):
+    # preds: [B,H] or [B,H,Q]
+    if preds.ndim == 2:
+        return preds
+    Q = preds.shape[2]
+    if quantiles is not None and 0.5 in quantiles:
+        q_idx = quantiles.index(0.5)
+    else:
+        q_idx = Q // 2
+    return preds[:, :, q_idx]
 
 def compute_metrics(predictions, targets):
     """
@@ -53,7 +63,7 @@ def compute_metrics(predictions, targets):
     return metrics
 
 
-def validation(model, valid_loader, criterion, device, compute_detailed_metrics=False):
+def validation(model, valid_loader, criterion, device, compute_detailed_metrics=False, y_scaler=None):
     """
     Validation
     
@@ -74,17 +84,15 @@ def validation(model, valid_loader, criterion, device, compute_detailed_metrics=
             
             outputs = model(x_val, return_attention=False)
             predictions = outputs['predictions']
-            
-            # Quantile median 추출
-            if len(predictions.shape) == 3:
-                median_idx = predictions.shape[2] // 2
-                predictions = predictions[:, :, median_idx]
-            
+
             loss = criterion(predictions, y_val)
+
+            predictions_point = pick_point_pred(predictions, getattr(criterion, "quantiles", None))
+            
             avg_valid_loss += loss.item()
             
             if compute_detailed_metrics:
-                all_preds.append(predictions.cpu().numpy())
+                all_preds.append(predictions_point.cpu().numpy())
                 all_trues.append(y_val.cpu().numpy())
     
     avg_valid_loss /= len(valid_loader)
@@ -92,13 +100,18 @@ def validation(model, valid_loader, criterion, device, compute_detailed_metrics=
     if compute_detailed_metrics:
         all_preds = np.concatenate(all_preds, axis=0)
         all_trues = np.concatenate(all_trues, axis=0)
+
+        if y_scaler is not None:
+            all_preds = y_scaler.inverse_transform(all_preds)
+            all_trues = y_scaler.inverse_transform(all_trues)
+
         metrics = compute_metrics(all_preds, all_trues)
         return avg_valid_loss, metrics
     
     return avg_valid_loss, None
 
 
-def train(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=100, patience=20):
+def train(model, train_loader, valid_loader, criterion, optimizer, device, num_epochs=300, patience=30, horizons=None, y_scaler=None):
     """
     TFT Training (Simple version with metrics)
     """
@@ -124,20 +137,15 @@ def train(model, train_loader, valid_loader, criterion, optimizer, device, num_e
             # Forward
             outputs = model(x_train, return_attention=False)
             predictions = outputs['predictions']
-            
-            # Quantile median
-            if len(predictions.shape) == 3:
-                median_idx = predictions.shape[2] // 2
-                predictions = predictions[:, :, median_idx]
-            
+
             loss = criterion(predictions, y_train)
-            
+
             # Backward
             optimizer.zero_grad()
             loss.backward()
             
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
             
@@ -148,35 +156,32 @@ def train(model, train_loader, valid_loader, criterion, optimizer, device, num_e
         train_hist[epoch] = avg_train_loss
         
         # ===== Validation =====
-        # 마지막 epoch에서만 detailed metrics 계산
-        compute_detailed = (epoch == num_epochs - 1) or (patience_counter >= patience - 1)
-        avg_valid_loss, metrics = validation(model, valid_loader, criterion, device, compute_detailed)
+        avg_valid_loss, _ = validation(
+            model, valid_loader, criterion, device,
+            compute_detailed_metrics=False,
+            y_scaler=y_scaler
+        )
         valid_hist[epoch] = avg_valid_loss
 
-        if hasattr(model, 'temporal_importance') and model.temporal_importance is not None:
-            if not hasattr(model, '_saved_attention'):
-                model._saved_attention = []
-            model._saved_attention.append(
-                model.temporal_importance.detach().cpu().numpy()
-            )
         
         # ===== Best model =====
         if avg_valid_loss < best_val_loss:
             best_val_loss = avg_valid_loss
             best_epoch = epoch + 1
             best_model_wts = copy.deepcopy(model.state_dict())
-            
-            # Detailed metrics for best model
-            if metrics is None:
-                _, metrics = validation(model, valid_loader, criterion, device, compute_detailed_metrics=True)
-            
-            best_metrics = metrics
+
+            # best model일 때만 detailed metrics 계산
+            _, best_metrics = validation(
+                model, valid_loader, criterion, device,
+                compute_detailed_metrics=True,
+                y_scaler=y_scaler
+            )
             patience_counter = 0
-            
             print(f'Epoch [{epoch+1:03d}/{num_epochs}] | Train: {avg_train_loss:.4f} | Valid: {avg_valid_loss:.4f} ✓')
         else:
             patience_counter += 1
             print(f'Epoch [{epoch+1:03d}/{num_epochs}] | Train: {avg_train_loss:.4f} | Valid: {avg_valid_loss:.4f}')
+
         
         # ===== Early stopping =====
         if patience_counter >= patience:
@@ -190,9 +195,26 @@ def train(model, train_loader, valid_loader, criterion, optimizer, device, num_e
     # Best metrics 출력
     if best_metrics:
         print(f'\n📊 Best Model Validation Metrics:')
-        print(f'   Overall - MAE: {best_metrics["mae_overall"]:.6f}, RMSE: {best_metrics["rmse_overall"]:.6f}, DA: {best_metrics["da_overall"]:.2f}%, R²: {best_metrics["r2_overall"]:.4f}')
-        
-        if hasattr(model, '_saved_attention'):
-            model.attention_history = model._saved_attention
+        print(
+            f'   Overall - MAE: {best_metrics["mae_overall"]:.6f}, '
+            f'RMSE: {best_metrics["rmse_overall"]:.6f}, '
+            f'DA: {best_metrics["da_overall"]:.2f}%, '
+            f'R²: {best_metrics["r2_overall"]:.4f}'
+        )
+
+        num_h = len([k for k in best_metrics.keys() if k.startswith("mae_h")])
+        if horizons is None:
+            horizons = list(range(num_h))
+
+        print(f'\n   Horizon-wise:')
+        for h_idx in range(num_h):
+            h_name = horizons[h_idx] if h_idx < len(horizons) else h_idx
+            print(
+                f'   H{h_name} - '
+                f'MAE: {best_metrics[f"mae_h{h_idx}"]:.6f}, '
+                f'RMSE: {best_metrics[f"rmse_h{h_idx}"]:.6f}, '
+                f'DA: {best_metrics[f"da_h{h_idx}"]:.2f}%, '
+                f'R²: {best_metrics[f"r2_h{h_idx}"]:.4f}'
+            )
     
-    return model.eval(), train_hist[:epoch+1], valid_hist[:epoch+1], best_metrics
+    return model.eval(), train_hist[:epoch+1], valid_hist[:epoch+1], best_metrics, best_epoch, best_val_loss

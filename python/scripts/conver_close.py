@@ -1,3 +1,4 @@
+
 import os
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
@@ -12,7 +13,6 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
-import json
 
 from gluonts.torch.model.deepar import DeepAREstimator
 from gluonts.evaluation import make_evaluation_predictions, Evaluator
@@ -43,39 +43,28 @@ def log_return_to_close(log_returns, initial_close):
     return close_prices
 
 
-def get_initial_close(original_df, item_id, val_start_date_str):
+def get_initial_close(df, item_id, split_date):
     """
     validation 시작 직전의 close 값을 가져옴
     
     Args:
-        original_df: 원본 데이터프레임 (datetime time 컬럼 포함)
-        item_id: 아이템 ID
-        val_start_date_str: validation 시작 날짜 문자열 (YYYY-MM-DD)
+        df: 전체 DataFrame (item_id, time, close 포함)
+        item_id: 'corn', 'wheat', 'soybean' 등
+        split_date: validation 시작 날짜
     
     Returns:
-        float: validation 시작 직전의 close 가격
+        float: 직전 close 가격
     """
-    item_df = original_df[original_df['item_id'] == item_id].copy()
-    item_df = item_df.sort_values('time').reset_index(drop=True)
+    item_df = df[df['item_id'] == item_id].copy()
+    item_df = item_df.sort_values('time')
     
-    # 날짜 문자열 변환
-    item_df['date_str'] = item_df['time'].astype(str).str[:10]
+    # validation 시작 직전 행
+    prev_df = item_df[item_df['time'] < split_date]
     
-    # validation 시작 직전까지의 데이터
-    prev_df = item_df[item_df['date_str'] < val_start_date_str]
+    if len(prev_df) == 0:
+        raise ValueError(f"No data before {split_date} for {item_id}")
     
-    if prev_df.empty:
-        raise ValueError(
-            f"{item_id}: no data before validation start {val_start_date_str}\n"
-            f"Available date range: {item_df['date_str'].min()} ~ {item_df['date_str'].max()}"
-        )
-    
-    initial_close = prev_df.iloc[-1]['close']
-    initial_date = prev_df.iloc[-1]['date_str']
-    
-    print(f"  ✅ {item_id}: initial_close = ${initial_close:.2f} (date: {initial_date})")
-    
-    return initial_close
+    return prev_df.iloc[-1]['close']
 
 
 # ===============================
@@ -85,13 +74,12 @@ def compute_close_metrics(pred_close, true_close):
     """
     실제 가격 기준 MAE, RMSE, MAPE 계산
     """
-    true_close = np.asarray(true_close).reshape(-1)
-    pred_close = np.asarray(pred_close).reshape(-1)
     mae = np.mean(np.abs(pred_close - true_close))
     rmse = np.sqrt(np.mean((pred_close - true_close)**2))
     mape = np.mean(np.abs((pred_close - true_close) / true_close)) * 100
     
     # Directional Accuracy (가격 방향)
+    # 현재 가격 대비 다음 가격이 올랐는지/내렸는지
     pred_direction = np.sign(np.diff(pred_close, prepend=pred_close[0]))
     true_direction = np.sign(np.diff(true_close, prepend=true_close[0]))
     
@@ -114,22 +102,32 @@ def plot_close_predictions(
     item_ids, 
     initial_closes,
     save_dir=None,
-    num_plots=6
+    num_plots=3
 ):
     """
     Log Return 예측 → Close로 복원 → 시각화
+    
+    Args:
+        forecasts: GluonTS Forecast 객체 리스트
+        tss: 실제 log return 시계열
+        item_ids: ['corn', 'wheat', 'soybean']
+        initial_closes: dict {item_id: 직전 close 값}
+        save_dir: 저장 경로
     """
     for i, (forecast, ts, item_id) in enumerate(zip(forecasts, tss, item_ids)):
         if i >= num_plots:
             break
         
         # ===== 1️⃣ Log Return → Close 복원 =====
+        # 실제값
         true_log_returns = ts.values[-len(forecast.mean):]
         true_close = log_return_to_close(true_log_returns, initial_closes[item_id])
         
+        # 예측값 (mean)
         pred_log_returns = forecast.mean
         pred_close_mean = log_return_to_close(pred_log_returns, initial_closes[item_id])
         
+        # 예측값 (0.1, 0.9 quantile)
         pred_log_q10 = forecast.quantile(0.1)
         pred_log_q90 = forecast.quantile(0.9)
         
@@ -139,12 +137,14 @@ def plot_close_predictions(
         # ===== 2️⃣ 시각화 =====
         fig, ax = plt.subplots(figsize=(12, 5))
         
+        # 날짜 인덱스
         forecast_index = pd.period_range(
             start=forecast.start_date,
             periods=len(forecast.mean),
             freq=forecast.freq,
         ).to_timestamp()
         
+        # 실제 Close
         ax.plot(
             forecast_index,
             true_close,
@@ -155,6 +155,7 @@ def plot_close_predictions(
             markersize=4
         )
         
+        # 예측 Close (Mean)
         ax.plot(
             forecast_index,
             pred_close_mean,
@@ -166,6 +167,7 @@ def plot_close_predictions(
             markersize=4
         )
         
+        # 80% Confidence Interval
         ax.fill_between(
             forecast_index,
             pred_close_q10,
@@ -175,6 +177,7 @@ def plot_close_predictions(
             label="80% Prediction Interval"
         )
         
+        # ===== 3️⃣ Metric 출력 =====
         metrics = compute_close_metrics(pred_close_mean, true_close)
         
         textstr = f"MAE: ${metrics['MAE_close']:.2f}\n"
@@ -197,6 +200,7 @@ def plot_close_predictions(
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
+        # ===== 4️⃣ 저장 =====
         if save_dir:
             save_path = Path(save_dir) / f"close_prediction_{item_id}.png"
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -215,12 +219,14 @@ def collect_close_metrics(forecasts, tss, item_ids, initial_closes, fold, horizo
     results = []
     
     for forecast, ts, item_id in zip(forecasts, tss, item_ids):
+        # Log Return → Close 복원
         true_log_returns = ts.values[-len(forecast.mean):]
         true_close = log_return_to_close(true_log_returns, initial_closes[item_id])
         
         pred_log_returns = forecast.mean
         pred_close_mean = log_return_to_close(pred_log_returns, initial_closes[item_id])
         
+        # Metric 계산
         metrics = compute_close_metrics(pred_close_mean, true_close)
         metrics.update({
             "item": item_id,
@@ -335,25 +341,20 @@ def main(cfg: TrainConfig):
     os.makedirs(cfg.checkpoint_dir, exist_ok=True)
     
     # ===============================
-    # 1️⃣ 데이터 로드 (원본 보관)
+    # 1️⃣ 데이터 로드
     # ===============================
     print("\n" + "="*60)
     print("📁 Loading Dataset")
     print("="*60)
     
-    original_dfs = {}  # 👈 원본 데이터프레임 (날짜 정보 보존)
     dfs = {}
-    
     for name in ["corn", "wheat", "soybean", "gold", "silver", "copper"]:
         data_path = os.path.join(cfg.data_dir, f"preprocessing/{name}_feature_engineering.csv")
         data = pd.read_csv(data_path)
         data["item_id"] = name
         data['time'] = pd.to_datetime(data['time'])
-        
-        original_dfs[name] = data.copy()  # 👈 원본 저장
         dfs[name] = data
-        
-        print(f"✅ {name}: {len(data)} samples, time range: {data['time'].min()} ~ {data['time'].max()}")
+        print(f"✅ {name}: {len(data)} samples")
 
     # ===============================
     # 2️⃣ Feature 추출 + Lag
@@ -369,26 +370,20 @@ def main(cfg: TrainConfig):
         dfs[name] = lag_features_by_1day(
             dfs[name], feature_cols, group_col="item_id", time_col="time"
         )
-        original_dfs[name] = dfs[name].copy()  # 👈 lag 적용 후에도 원본 업데이트
 
     cfg.epochs = 30
-    cfg.fold = [0,1,2,3,4,5,6,7]
+    cfg.fold = [7]
 
-    all_results_log = []
-    all_results_close = []
+    all_results_log = []  # Log Return 기반 metric
+    all_results_close = []  # Close 기반 metric
 
     # ===============================
     # 3️⃣ Fold별 학습
     # ===============================
     for fold in cfg.fold:
-        print(f"\n{'='*60}")
-        print(f"🔄 Processing Fold {fold}")
-        print(f"{'='*60}")
-        
         train_dfs = {}
         val_dfs = {}
         
-        # ===== Split 수행 =====
         for name, df in dfs.items():
             train_df, val_df = deepar_split(
                 df,
@@ -398,23 +393,18 @@ def main(cfg: TrainConfig):
             train_dfs[name] = train_df
             val_dfs[name] = val_df
         
-        # ===== Validation 시작 날짜 추출 (JSON에서) =====
-        with open(os.path.join(cfg.data_dir, "rolling_fold.json"), "r") as f:
-            fold_data = json.load(f)
+        # ===== Validation 시작 날짜 추출 =====
+        val_start_dates = {}
+        for name, val_df in val_dfs.items():
+            val_start_dates[name] = val_df['time'].min()
         
-        val_dates_from_json = fold_data["folds"][fold]["val"]["t_dates"]
-        val_start_date_str = str(val_dates_from_json[0])[:10]  # 'YYYY-MM-DD'
-        
-        print(f"\n📅 Validation start date: {val_start_date_str}")
-        
-        # ===== 직전 Close 값 추출 (원본 데이터프레임 사용) =====
+        # ===== 직전 Close 값 추출 =====
         initial_closes = {}
         for name in dfs.keys():
             initial_closes[name] = get_initial_close(
-                original_dfs[name],  # 👈 원본 데이터프레임 사용
-                name,
-                val_start_date_str
+                dfs[name], name, val_start_dates[name]
             )
+            print(f"📌 {name} initial close: ${initial_closes[name]:.2f}")
         
         # ===============================
         # 4️⃣ Horizon별 학습
@@ -514,6 +504,7 @@ def main(cfg: TrainConfig):
             
             plot_loss_from_logger(logger, save_path=save_path / "loss_curve.png")
             
+            # Close 기반 시각화
             plot_close_predictions(
                 forecasts=forecasts,
                 tss=tss,
@@ -528,11 +519,13 @@ def main(cfg: TrainConfig):
     # ===============================
     # 9️⃣ 최종 결과 저장
     # ===============================
+    # Log Return Metric
     log_df = pd.DataFrame(all_results_log)
     log_csv = Path(cfg.checkpoint_dir) / "deepar_metrics_log_return.csv"
     log_df.to_csv(log_csv, index=False, float_format="%.6f")
     print(f"\n✅ Log Return Metrics saved to: {log_csv}")
     
+    # Close Metric
     close_df = pd.DataFrame(all_results_close)
     close_csv = Path(cfg.checkpoint_dir) / "deepar_metrics_close.csv"
     close_df.to_csv(close_csv, index=False, float_format="%.6f")

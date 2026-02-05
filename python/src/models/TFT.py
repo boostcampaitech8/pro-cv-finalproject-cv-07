@@ -25,7 +25,8 @@ class GatedResidualNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.context_dim = context_dim
-        
+
+
         # Layer 1
         if context_dim is not None:
             self.fc1 = nn.Linear(input_dim + context_dim, hidden_dim)
@@ -81,6 +82,63 @@ class GatedResidualNetwork(nn.Module):
         output = self.layer_norm(x + h)
         
         return output
+
+
+class VariableSelectionNetwork(nn.Module):
+    """
+    TFT Variable Selection Network (time-varying real variables only)
+    """
+    def __init__(self, num_features, hidden_dim, dropout=0.1):
+        super().__init__()
+        self.num_features = num_features
+
+        self.feature_grns = nn.ModuleList([
+            GatedResidualNetwork(
+                input_dim=1,
+                hidden_dim=hidden_dim,
+                output_dim=hidden_dim,
+                dropout=dropout
+            )
+            for _ in range(num_features)
+        ])
+
+        self.weight_grn = GatedResidualNetwork(
+            input_dim=num_features,
+            hidden_dim=hidden_dim,
+            output_dim=hidden_dim,
+            dropout=dropout
+        )
+
+        self.weight_projection = nn.Linear(hidden_dim, num_features)
+
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        """
+        x: [B, T, F]
+        returns:
+            selected_x: [B, T, hidden_dim]
+            weights:    [B, T, F]
+        """
+        B, T, F = x.shape
+
+        # Feature-wise GRN
+        transformed = []
+        for i in range(F):
+            xi = x[:, :, i:i+1]
+            transformed.append(self.feature_grns[i](xi))
+
+        transformed = torch.stack(transformed, dim=-1)  # [B, T, hidden_dim, F]
+
+        # Importance weights
+        raw_weights = self.weight_grn(x)             # [B, T, hidden_dim]
+        weights = self.weight_projection(raw_weights) # [B, T, F]
+        weights = self.softmax(weights)
+
+        # Weighted sum
+        selected = (transformed * weights.unsqueeze(2)).sum(dim=-1)
+
+        return selected, weights
 
 
 class InterpretableMultiHeadAttention(nn.Module):
@@ -141,28 +199,28 @@ class InterpretableMultiHeadAttention(nn.Module):
         K = self.k_proj(key).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
         V = self.v_proj(value).view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
         
-        # Scaled dot-product attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.head_dim)
-        
-        # Apply mask if provided
+        # Scaled dot-product attention (torch 기반 스케일)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+
+        # Apply mask if provided (mask는 bool: True=keep, False=block 로 쓰자)
         if mask is not None:
-            scores = scores.masked_fill(mask.unsqueeze(1) == 0, -1e9)
-        
-        # Attention weights
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_weights = self.dropout(attention_weights)
-        
-        # Store for interpretation
-        self.attention_weights = attention_weights.detach()
-        
+            scores = scores.masked_fill(~mask.unsqueeze(1), float("-inf"))
+
+        # Attention weights: 해석용은 dropout 전 softmax 결과를 저장/리턴
+        attn = F.softmax(scores, dim=-1)           # [B, H, Lq, Lk]
+        self.attention_weights = attn.detach()     # 여기 저장은 dropout 전
+
+        # dropout은 context 계산에만 적용
+        attn_drop = self.dropout(attn)
+
         # Apply attention to values
-        context = torch.matmul(attention_weights, V)
-        
+        context = torch.matmul(attn_drop, V)
+
         # Reshape and project
         context = context.transpose(1, 2).contiguous().view(batch_size, -1, self.embed_dim)
         output = self.out_proj(context)
-        
-        return output, attention_weights
+
+        return output, attn
 
 
 class TemporalFusionTransformer(nn.Module):
@@ -182,7 +240,7 @@ class TemporalFusionTransformer(nn.Module):
         use_variable_selection: bool = False,
         quantiles: Optional[List[float]] = None,
         news_embedding_dim: int = 512,
-        news_projection_dim: int = 32
+        news_projection_dim: int = 32,
     ):
         super().__init__()
         
@@ -192,7 +250,7 @@ class TemporalFusionTransformer(nn.Module):
         self.lstm_layers = lstm_layers
         self.attention_heads = attention_heads
         self.use_variable_selection = use_variable_selection
-        self.quantiles = quantiles if quantiles is not None else [0.1, 0.5, 0.9]
+        self.quantiles = quantiles
         
         self.news_embedding_dim = news_embedding_dim
         self.news_projection_dim = news_projection_dim
@@ -228,8 +286,20 @@ class TemporalFusionTransformer(nn.Module):
         print(f"News embedding: {news_embedding_dim if self.has_news else 0} → {news_projection_dim if self.has_news else 0}")
         print(f"Total features after projection: {self.total_features}")
         
-        lstm_input_dim = self.total_features
-        
+        if self.use_variable_selection:
+            lstm_input_dim = hidden_dim
+        else:
+            lstm_input_dim = self.total_features
+
+
+        # VSN
+        if self.use_variable_selection:
+            self.vsn = VariableSelectionNetwork(
+                num_features=self.total_features,
+                hidden_dim=hidden_dim,
+                dropout=dropout
+            )
+
         # LSTM Encoder
         self.lstm_encoder = nn.LSTM(
             input_size=lstm_input_dim,
@@ -245,6 +315,15 @@ class TemporalFusionTransformer(nn.Module):
             num_heads=attention_heads,
             dropout=dropout
         )
+
+        # Horizon embedding + horizon attention (for per-horizon temporal importance)
+        self.horizon_emb = nn.Parameter(torch.randn(num_horizons, hidden_dim) * 0.02)
+
+        self.horizon_attn = InterpretableMultiHeadAttention(
+            embed_dim=hidden_dim,
+            num_heads=attention_heads,
+            dropout=dropout
+        )
         
         # Post-attention GRN
         self.post_attention_grn = GatedResidualNetwork(
@@ -255,7 +334,7 @@ class TemporalFusionTransformer(nn.Module):
         )
         
         # Output layers (per horizon)
-        if quantiles:
+        if quantiles is not None:
             # Quantile regression
             self.output_layers = nn.ModuleList([
                 nn.Linear(hidden_dim, len(quantiles)) for _ in range(num_horizons)
@@ -305,15 +384,28 @@ class TemporalFusionTransformer(nn.Module):
             encoder_input = x
         # ===============================================
         
+        # ===== Variable Selection Network =====
+        if self.use_variable_selection:
+            encoder_input, var_weights = self.vsn(encoder_input)
+            self.variable_importance = var_weights.detach()
+        else:
+            self.variable_importance = None
+
         # ===== 2. LSTM Encoding =====
         encoder_output, (h_n, c_n) = self.lstm_encoder(encoder_input)
         # encoder_output: [batch_size, seq_length, hidden_dim]
         
         # ===== 3. Multi-head Attention =====
+        # causal mask (미래를 보지 못하게): True=keep, False=block
+        L = encoder_output.size(1)
+        causal = torch.tril(torch.ones(L, L, device=encoder_output.device, dtype=torch.bool))
+        mask = causal.unsqueeze(0).expand(batch_size, L, L)  # [B, L, L]
+
         attention_output, attention_weights = self.attention(
             query=encoder_output,
             key=encoder_output,
-            value=encoder_output
+            value=encoder_output,
+            mask=mask
         )
         
         # Store for interpretation
@@ -322,27 +414,40 @@ class TemporalFusionTransformer(nn.Module):
         # ===== 4. Post-attention GRN =====
         attention_output = self.post_attention_grn(attention_output)
         
-        # ===== 5. Aggregate (마지막 timestep) =====
-        aggregated = attention_output[:, -1, :]  # [batch_size, hidden_dim]
-        
-        # ===== 6. Multi-horizon prediction =====
+        # memory: [B,T,H]
+        memory = attention_output
+
+        # base query from last state: [B,1,H] -> [B,num_horizons,H]
+        base_q = memory[:, -1:, :].repeat(1, self.num_horizons, 1)
+
+        # add horizon embedding: [1,num_horizons,H]
+        q = base_q + self.horizon_emb.unsqueeze(0)
+
+        # horizon attention: query=[B,num_horizons,H], key/value=[B,T,H]
+        # output: ctx=[B,num_horizons,H], attn=[B,heads,num_horizons,T]
+        ctx, attn_h = self.horizon_attn(
+            query=q,
+            key=memory,
+            value=memory,
+            mask=None  # query는 '미래 horizon'이므로 과거 전체를 볼 수 있게
+        )
+
+        # horizon-wise prediction
         predictions = []
         for i in range(self.num_horizons):
-            pred_i = self.output_layers[i](aggregated)
+            pred_i = self.output_layers[i](ctx[:, i, :])
+            if self.quantiles is None:
+                pred_i = pred_i.squeeze(-1)
             predictions.append(pred_i)
-        
-        # Stack predictions
-        if self.quantiles:
-            predictions = torch.stack(predictions, dim=1)  # [batch, horizons, quantiles]
-        else:
-            predictions = torch.cat(predictions, dim=1)  # [batch, horizons]
-        
-        # ===== Output =====
-        output = {'predictions': predictions}
-        
+
+        predictions = torch.stack(predictions, dim=1)  # [B,H,Q] or [B,H]
+
+        output = {"predictions": predictions}
+
         if return_attention:
-            output['attention_weights'] = self.temporal_importance
-            output['variable_importance'] = None  # Variable selection 꺼져있음
+            output["attention_weights"] = self.temporal_importance  # 기존 self-attn (T×T)
+            output["horizon_attention_weights"] = attn_h.detach()   # ★ 추가: [B,heads,H,T]
+            output["variable_importance"] = self.variable_importance
         
         return output
     

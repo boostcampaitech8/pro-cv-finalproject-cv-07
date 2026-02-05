@@ -38,7 +38,7 @@ def main(cfg: TrainConfig):
                 quoting=csv.QUOTE_ALL
             )
 
-    for name in ["silver","copper"]:
+    for name in ["gold"]:
         data = pd.read_csv(os.path.join(cfg.data_dir, f"{name}_future_price.csv"))
         data = add_log_return_feature(data, cfg.horizons)
         data = add_ema_features(data) if cfg.use_ema_features else data

@@ -258,6 +258,12 @@ def main(config: TrainConfig):
     
     predictions = np.concatenate(all_predictions, axis=0)
     targets = np.concatenate(all_targets, axis=0)
+
+    num_samples = predictions.shape[0]
+    valid_dates = valid_dates[-num_samples:]
+
+    assert len(valid_dates) == predictions.shape[0], \
+        f"Date mismatch: {len(valid_dates)} vs {predictions.shape[0]}"
     
     print(f"✓ Predictions shape: {predictions.shape}")
     
@@ -271,7 +277,7 @@ def main(config: TrainConfig):
     
     for h_idx, horizon in enumerate(config.horizons):
         save_path = viz_dir / f"validation_h{horizon}.png"
-        
+
         plot_single_horizon(
             valid_dates,
             targets[:, h_idx],

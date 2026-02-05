@@ -5,6 +5,60 @@ import torch
 from torch.utils.data import Dataset
 from typing import List, Tuple, Dict, Optional
 
+class SimpleYScaler:
+    """y_mean, y_std를 sklearn scaler처럼 사용"""
+    def __init__(self, mean: np.ndarray, std: np.ndarray):
+        self.mean = mean  # [H]
+        self.std = std    # [H]
+    
+    def transform(self, Y: np.ndarray) -> np.ndarray:
+        return ((Y - self.mean) / self.std).astype(np.float32)
+    
+    def inverse_transform(self, Y_scaled: np.ndarray) -> np.ndarray:
+        return (Y_scaled * self.std + self.mean).astype(np.float32)
+
+def _fit_x_scaler(trainX: np.ndarray, feature_mask: np.ndarray, eps: float = 1e-8):
+    """
+    trainX: [N, T, F]
+    feature_mask: [F] boolean (True인 feature만 mean/std 학습해서 스케일링)
+    """
+    N, T, F = trainX.shape
+    flat = trainX.reshape(-1, F)  # [N*T, F]
+
+    # 마스크된 feature만 통계 계산
+    flat_m = flat[:, feature_mask]
+    mean_m = flat_m.mean(axis=0)
+    std_m = flat_m.std(axis=0)
+    std_m = np.where(std_m < eps, 1.0, std_m)
+
+    # 전체 길이(F)로 mean/std 만들고,
+    # 스케일 안 하는 feature는 (mean=0, std=1)로 둬서 transform 시 원본 유지
+    mean = np.zeros(F, dtype=np.float32)
+    std = np.ones(F, dtype=np.float32)
+    mean[feature_mask] = mean_m.astype(np.float32)
+    std[feature_mask] = std_m.astype(np.float32)
+
+    return mean.astype(np.float32), std.astype(np.float32)
+
+
+def _transform_x(X: np.ndarray, mean: np.ndarray, std: np.ndarray):
+    return ((X - mean) / std).astype(np.float32)
+
+def _fit_y_scaler(trainY: np.ndarray, eps: float = 1e-8):
+    """
+    trainY: [N, H]  (H = num_horizons)
+    """
+    mean = trainY.mean(axis=0)
+    std = trainY.std(axis=0)
+    std = np.where(std < eps, 1.0, std)
+    return mean.astype(np.float32), std.astype(np.float32)
+
+def _transform_y(Y: np.ndarray, mean: np.ndarray, std: np.ndarray):
+    return ((Y - mean) / std).astype(np.float32)
+
+def _inverse_y(Y_scaled: np.ndarray, mean: np.ndarray, std: np.ndarray):
+    return (Y_scaled * std + mean).astype(np.float32)
+
 
 def align_news_to_trading_dates_runtime(
     price_df: pd.DataFrame,
@@ -184,11 +238,17 @@ def build_tft_dataset(
     if feature_columns is None:
         exclude_cols = ['time', 'date']
         exclude_cols += [c for c in time_series.columns if c.startswith('log_return_')]
-        feature_columns = [
+        numeric_cols = [
             c for c in time_series.columns
             if c not in exclude_cols and
-               np.issubdtype(time_series[c].dtype, np.number)
+            np.issubdtype(time_series[c].dtype, np.number)
         ]
+
+        news_emb_cols = sorted([c for c in numeric_cols if c.startswith('news_emb_')])
+        other_numeric_cols = [c for c in numeric_cols if not c.startswith('news_emb_')]
+
+        feature_columns = other_numeric_cols + news_emb_cols
+
 
     dataX, dataY, dataT = [], [], []
     max_h = max(horizons)
@@ -256,10 +316,10 @@ def train_valid_split_tft(
     train_mask = np.isin(T, train_dates)
     valid_mask = np.isin(T, valid_dates)
     
-    trainX, trainY = X[train_mask], Y[train_mask]
-    validX, validY = X[valid_mask], Y[valid_mask]
+    trainX, trainY, trainT = X[train_mask], Y[train_mask], T[train_mask]
+    validX, validY, validT = X[valid_mask], Y[valid_mask], T[valid_mask]
     
-    return trainX, trainY, validX, validY
+    return trainX, trainY, trainT, validX, validY, validT
 
 
 def test_split_tft(
@@ -319,6 +379,8 @@ class TFTDataLoader:
             horizons,
             feature_columns
         )
+
+        self.fold_scalers = {}
         
         print(f"\n✓ Total samples: {len(self.X)}")
         print(f"✓ Feature dimension: {self.X.shape[-1]}")
@@ -326,13 +388,53 @@ class TFTDataLoader:
     
     def get_fold_loaders(
         self,
-        fold_index: int
+        fold_index: int,
+        scale_x: bool = True,
+        scale_y: bool = True,
+        eps: float = 1e-8
     ) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
         """특정 fold의 train/valid DataLoader"""
-        trainX, trainY, validX, validY = train_valid_split_tft(
+        trainX, trainY, trainT, validX, validY, validT = train_valid_split_tft(
             self.X, self.Y, self.T, self.split_file, fold_index
         )
-        
+        scaler = {}
+
+        if scale_x:
+            # news_emb_* 는 스케일링 제외
+            feature_mask = np.array(
+                [not str(n).startswith("news_emb_") for n in self.feature_names],
+                dtype=bool
+            )
+
+            x_mean, x_std = _fit_x_scaler(trainX, feature_mask=feature_mask, eps=eps)
+            trainX = _transform_x(trainX, x_mean, x_std)
+            validX = _transform_x(validX, x_mean, x_std)
+
+            scaler["x_mean"] = x_mean
+            scaler["x_std"] = x_std
+
+            # (선택) 재현/디버깅용 메타 저장
+            scaler["x_feature_mask"] = feature_mask.astype(np.int8)
+            scaler["x_scaled_features"] = np.array(
+                [self.feature_names[i] for i in np.where(feature_mask)[0]],
+                dtype=object
+            )
+
+        if scale_y:
+            y_mean, y_std = _fit_y_scaler(trainY, eps=eps)
+            trainY = _transform_y(trainY, y_mean, y_std)
+            validY = _transform_y(validY, y_mean, y_std)
+            
+            # SimpleYScaler 객체로 저장
+            scaler["y_scaler_obj"] = SimpleYScaler(y_mean, y_std)
+            scaler["y_mean"] = y_mean  # 호환성 유지
+            scaler["y_std"] = y_std
+
+        scaler["scale_x"] = bool(scale_x)
+        scaler["scale_y"] = bool(scale_y)
+
+        self.fold_scalers[fold_index] = scaler
+
         train_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(trainX),
             torch.FloatTensor(trainY)
@@ -359,13 +461,28 @@ class TFTDataLoader:
             pin_memory=True
         )
         
-        return train_loader, valid_loader
+        return train_loader, valid_loader, validT
     
-    def get_test_loader(self) -> Tuple[List[str], torch.utils.data.DataLoader]:
+    def get_test_loader(
+        self,
+        fold_index: int,
+        scale_x: bool = True,
+        scale_y: bool = True
+    ) -> Tuple[List[str], torch.utils.data.DataLoader]:
         """Test DataLoader"""
         test_dates, testX, testY = test_split_tft(
             self.X, self.Y, self.T, self.split_file
         )
+
+        # fold scaler 적용 (train에서 fit된 값)
+        scaler = self.fold_scalers.get(fold_index, None)
+
+        if scaler is not None and scale_x and scaler.get("scale_x", False):
+            testX = _transform_x(testX, scaler["x_mean"], scaler["x_std"])
+
+        if scaler is not None and scale_y and scaler.get("scale_y", False):
+            testY = _transform_y(testY, scaler["y_mean"], scaler["y_std"])
+
         
         test_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(testX),
