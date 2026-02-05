@@ -1,0 +1,53 @@
+name: CI-CD
+
+on:
+  push:
+    branches:
+      - "ci-cd"
+
+env:
+  REGION: asia-northeast3
+  GCE_INSTANCE_ZONE: asia-northeast3-a
+  GCE_INSTANCE: production-server
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  IMAGE: web-server
+  CONTAINER_PORT: "3333"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Docker login
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME  }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Docker build
+        run: |
+          docker build \
+            -t "$DOCKERHUB_USERNAME/$IMAGE:$GITHUB_SHA" \
+            new/model_deploy
+
+      - name: Docker push
+        run: |
+          docker push "$DOCKERHUB_USERNAME/$IMAGE:$GITHUB_SHA"
+  cd:
+    runs-on: ubuntu-latest
+    needs: [ci]
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v0.6.0
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+      - uses: google-github-actions/setup-gcloud@v1
+
+      - name: Deploy to GCE
+        run: |
+          gcloud compute instances update-container "$GCE_INSTANCE" \
+            --zone "$GCE_INSTANCE_ZONE" \
+            --container-image "$DOCKERHUB_USERNAME/$IMAGE:$GITHUB_SHA" \
+            --container-port "$CONTAINER_PORT"
