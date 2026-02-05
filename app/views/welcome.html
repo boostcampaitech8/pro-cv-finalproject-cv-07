@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}가입을 환영합니다!{% endblock %}
+
+{% block content %}
+    <div class="welcome-card">
+        <div class="icon-large">✨</div>
+        <h2>가입 완료!</h2>
+        <p>
+            <strong>{{ user.nickname }}</strong>님, 진심으로 환영합니다.<br>
+            이제 모든 서비스를 자유롭게 이용하실 수 있습니다.
+        </p>
+        <div class="user-id-badge">회원번호: #{{ user.member_id }}</div>
+        
+        <a href="/" class="btn btn-primary">메인 화면으로 이동</a>
+    </div>
+{% endblock %}

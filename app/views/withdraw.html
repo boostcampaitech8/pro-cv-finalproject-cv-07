@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}회원 탈퇴 인증{% endblock %}
+
+{% block content %}
+    <div class="withdraw-card">
+        <div class="icon-large">⚠️</div>
+        <h2>회원 탈퇴 본인 확인</h2>
+        <p>안전한 탈퇴를 위해 가입하신 소셜 계정으로<br>다시 한번 인증이 필요합니다.</p>
+        
+        <div style="margin-top: 10px;">
+            {% for acc in social_accs %}
+                {# 구글/네이버에 따른 스타일 분기 처리 #}
+                {% set is_google = acc.provider_name == 'google' %}
+                <button onclick="location.href='/withdraw/verify/{{ acc.provider_name }}'" 
+                    class="btn {{ 'google-btn' if acc.provider_name == 'google' else 'naver-btn' }}"
+                    style="margin-bottom: 12px;">
+                    {% if is_google %}
+                        <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" style="width: 18px; margin-right: 10px;">
+                    {% else %}
+                        <span style="font-weight: 900; margin-right: 10px;">N</span>
+                    {% endif %}
+                    {{ acc.provider_name.capitalize() }} 계정으로 인증 후 탈퇴
+                </button>
+            {% endfor %}
+        </div>
+        
+        <a href="/" class="back-link">탈퇴 취소하고 홈으로 돌아가기</a>
+    </div>
+{% endblock %}

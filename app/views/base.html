@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}My App{% endblock %}</title>
+    <style>
+        /* 1. 기본 레이아웃 */
+        body { 
+            background-color: #f9f9f9; 
+            font-family: 'Pretendard', -apple-system, sans-serif; 
+            display: flex; justify-content: center; align-items: center; 
+            min-height: 100vh;
+            margin: 0; 
+            padding: 40px 20px; /* 상하 여백을 충분히 줌 */
+            box-sizing: border-box;
+        }
+
+        /* 2. 카드 컨테이너 - 너비 상향 조정 */
+        .container, .card, .login-card { 
+            background: white; 
+            padding: 50px 40px; /* 좌우 패딩 유지 */
+            border-radius: 20px; /* 곡률을 살짝 더 주어 부드럽게 */
+            box-shadow: 0 15px 35px rgba(0,0,0,0.07); 
+            text-align: center; 
+            max-width: 480px; /* 기존 400px -> 480px로 확장 */
+            width: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 3. 텍스트 요소 */
+        h2 { color: #333; margin-top: 0; margin-bottom: 12px; font-size: 26px; letter-spacing: -0.5px; }
+        p { color: #888; font-size: 1em; margin-bottom: 30px; line-height: 1.6; }
+        .nickname { color: #4A90E2; font-weight: 700; }
+
+        /* 4. 프로필 이미지 */
+        .profile-img, .profile-preview {
+            width: 110px; height: 110px; /* 크기 살짝 키움 */
+            border-radius: 50%; 
+            object-fit: cover; border: 4px solid #f8f9fa; 
+            margin: 0 auto 25px auto;
+            flex-shrink: 0;
+        }
+
+        /* 5. 버튼 시스템 */
+        button, .btn, .login-btn { 
+            width: 100%; 
+            height: 54px; /* 높이 소폭 상향 */
+            border-radius: 10px; 
+            font-weight: 600; font-size: 16px; 
+            cursor: pointer; transition: 0.2s; 
+            text-decoration: none; 
+            display: flex; align-items: center; justify-content: center;
+            box-sizing: border-box; border: none;
+            margin-bottom: 12px;
+        }
+    
+        .btn-primary { background: #4A90E2; color: white !important; }
+        .btn-secondary { background: #f1f3f5; color: #495057 !important; }
+        .google-btn { background: white; color: #3c4043 !important; border: 1px solid #dadce0 !important; }
+        .naver-btn { background: #03C75A; color: white !important; }
+
+        /* 6. 입력 폼 */
+        .form-group { text-align: left; margin-bottom: 22px; width: 100%; }
+        label { display: block; font-weight: 600; margin-bottom: 10px; color: #333; font-size: 0.9em; }
+        input[type="text"], input[type="date"] { 
+            width: 100%; height: 52px; padding: 0 16px; border: 1.5px solid #eee; border-radius: 10px; 
+            box-sizing: border-box; font-size: 16px; outline: none; transition: 0.2s;
+            background-color: #fcfcfc;
+        }
+        input:focus { border-color: #4A90E2; background-color: #fff; box-shadow: 0 0 0 4px rgba(74, 144, 226, 0.1); }
+    
+        .radio-group { display: flex; gap: 25px; padding: 8px 0; }
+        .radio-item { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 1em; color: #444; }
+        input[type="radio"] { width: 18px; height: 18px; cursor: pointer; accent-color: #4A90E2; }
+
+        /* 7. 하단 링크 */
+        .back-link, .withdraw-link { margin-top: 25px; color: #adb5bd; font-size: 0.9em; text-decoration: none; transition: 0.2s; }
+        .back-link:hover, .withdraw-link:hover { color: #495057; text-decoration: underline; }
+
+        /* 8. 에러 전용 스타일 (추가) */
+        .error-container {
+            animation: shake 0.4s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-8px); }
+            75% { transform: translateX(8px); }
+        }
+
+        .btn-error { 
+            background: #ff4d4d !important; 
+            color: white !important; 
+        }
+        .btn-error:hover { background: #e63939 !important; }
+
+        .icon-large { font-size: 48px; margin-bottom: 20px; }
+        
+        .welcome-card { 
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-id-badge { 
+            font-size: 0.85em; 
+            color: #aaa; 
+            margin-top: -10px; 
+            margin-bottom: 25px; 
+        }
+
+        /* 강조 텍스트 */
+        strong { color: #333; }
+
+        .result-card { 
+            animation: fadeIn 0.5s ease-out; 
+        }
+    
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(10px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+
+        .btn-home { background: #4A90E2; color: white !important; }
+        .btn-home:hover { background: #357ABD; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        {% block content %}
+        {% endblock %}
+    </div>
+</body>
+</html>

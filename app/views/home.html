@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}홈 - {{ user.nickname if user else "환영합니다" }}{% endblock %}
+
+{% block content %}
+    {% if user %}
+        <img src="{{ user.profile_image or 'https://via.placeholder.com/100' }}" class="profile-img">
+        <h2>안녕하세요, <span class="nickname">{{ user.nickname }}</span>님!</h2>
+        <hr>
+        <div class="btn-group">
+            <button onclick="location.href='/edit-profile'" class="btn btn-primary">정보 수정</button>
+            <button onclick="location.href='/logout'" class="btn btn-secondary">로그아웃</button>
+        </div>
+        <a href="/withdraw" class="withdraw-link">회원 탈퇴를 원하시나요?</a>
+    {% else %}
+        <div style="font-size: 50px; margin-bottom: 20px;">👋</div>
+        <h2>반가워요!</h2>
+        <p style="color: #666; margin-bottom: 30px;">서비스를 이용하려면 로그인이 필요합니다.</p>
+        <button onclick="location.href='/login'" class="btn btn-primary" style="width: 100%;">로그인하러 가기</button>
+    {% endif %}
+{% endblock %}

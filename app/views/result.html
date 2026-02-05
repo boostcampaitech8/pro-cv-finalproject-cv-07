@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+    <div class="result-card">
+        <div class="icon-large">{{ icon }}</div>
+        <h2>{{ title }}</h2>
+        <p>{{ message | safe }}</p>
+        
+        <a href="/" class="btn {{ 'btn-home' if is_success else 'btn-error' }}">
+            {{ button_text or '홈으로 이동' }}
+        </a>
+    </div>
+{% endblock %}
