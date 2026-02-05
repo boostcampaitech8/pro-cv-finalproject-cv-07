@@ -187,7 +187,11 @@ def main(config: TrainConfig):
         )
         
         data = pd.read_csv(price_path)
-        test_dates, test_loader = data_loader.get_test_loader()
+        test_dates, test_loader = data_loader.get_test_loader(
+            fold,
+            scale_x=config.scale_x,
+            scale_y=config.scale_y
+        )
         
         all_preds = []
         all_trues = []
@@ -207,23 +211,13 @@ def main(config: TrainConfig):
             
             checkpoint = torch.load(checkpoint_path, map_location=device)
             
-            if 'config' in checkpoint:
-                model_config = checkpoint['config']
-            else:
-                model_config = {
-                    'hidden_dim': config.hidden_dim,
-                    'num_layers': config.num_layers,
-                    'attention_heads': config.attention_heads,
-                    'dropout': config.dropout
-                }
-            
             model = TemporalFusionTransformer(
                 num_features=data_loader.X.shape[-1],
                 num_horizons=len(config.horizons),
-                hidden_dim=model_config['hidden_dim'],
-                lstm_layers=model_config['num_layers'],
-                attention_heads=model_config['attention_heads'],
-                dropout=model_config['dropout'],
+                hidden_dim=config.hidden_dim,
+                lstm_layers=config.num_layers,
+                attention_heads=config.attention_heads,
+                dropout=config.dropout,
                 use_variable_selection=config.use_variable_selection,
                 quantiles=config.quantiles if config.quantile_loss else None
             )
@@ -231,6 +225,18 @@ def main(config: TrainConfig):
             model = model.to(device)
             
             preds, trues = test(model, test_loader, device)
+
+            scaler_path = fold_dir / "scaler.npz"
+            if scaler_path.exists():
+                sc = np.load(scaler_path, allow_pickle=True)
+                if bool(sc["scale_y"]):
+                    y_mean = sc["y_mean"].astype(np.float32)
+                    y_std = sc["y_std"].astype(np.float32)
+
+                    # preds: [N,H] (median 뽑은 뒤)
+                    preds = preds * y_std[None, :] + y_mean[None, :]
+                    trues = trues * y_std[None, :] + y_mean[None, :]
+
             
             all_preds.append(preds)
             all_trues.append(trues)
