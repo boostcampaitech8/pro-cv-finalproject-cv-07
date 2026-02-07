@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset_cnn import CNNDataset, VOLUME_COLUMNS, cnn_collate_fn
+from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
 from src.interpretation.cnn_visualizer import GradCAM
 from src.models.CNN import CNN
 
@@ -87,6 +87,7 @@ def _auto_select_gradcam_stage(
     images: torch.Tensor,
     aux: Optional[torch.Tensor],
     candidate_stages: List[int],
+    gradcam_method: str,
 ) -> Optional[int]:
     """
     Pick a Grad-CAM stage that maximizes average CAM std on a small sample.
@@ -103,7 +104,7 @@ def _auto_select_gradcam_stage(
         layer = _select_gradcam_layer(model.backbone, backbone_name, stage_idx)
         if layer is None:
             continue
-        cam_helper = GradCAM(model, layer)
+        cam_helper = GradCAM(model, layer, method=gradcam_method)
         cams = []
         for i in range(sample_count):
             img_i = images[i : i + 1]
@@ -124,6 +125,32 @@ def _auto_select_gradcam_stage(
     return best_stage
 
 
+def _build_severity_levels_from_values(
+    values: np.ndarray,
+    q80: np.ndarray,
+    q90: np.ndarray,
+    q95: np.ndarray,
+) -> Dict[str, str]:
+    """
+    Map values to severity levels using dataset thresholds.
+    """
+    levels: Dict[str, str] = {}
+
+    for idx, horizon in enumerate(HORIZONS):
+        val = float(values[idx])
+        if val < float(q80[idx]):
+            level = "below_q80"
+        elif val < float(q90[idx]):
+            level = "q80_q90"
+        elif val < float(q95[idx]):
+            level = "q90_q95"
+        else:
+            level = "above_q95"
+        levels[f"h{horizon}"] = level
+
+    return levels
+
+
 def _build_severity_levels(
     raw_returns: np.ndarray,
     q80: np.ndarray,
@@ -133,21 +160,7 @@ def _build_severity_levels(
     """
     Map raw return values to severity levels using dataset thresholds.
     """
-    levels: Dict[str, str] = {}
-
-    for idx, horizon in enumerate(HORIZONS):
-        raw_val = float(raw_returns[idx])
-        if raw_val < float(q80[idx]):
-            level = "below_q80"
-        elif raw_val < float(q90[idx]):
-            level = "q80_q90"
-        elif raw_val < float(q95[idx]):
-            level = "q90_q95"
-        else:
-            level = "above_q95"
-        levels[f"h{horizon}"] = level
-
-    return levels
+    return _build_severity_levels_from_values(raw_returns, q80, q90, q95)
 
 
 def _load_checkpoint(model: torch.nn.Module, checkpoint_path: Path, device: str) -> None:
@@ -167,13 +180,14 @@ def run_inference_cnn(
     fusion: str,
     exp_name: str,
     use_aux: bool = False,
-    aux_type: str = "volume",
+    aux_type: str = "news",
     checkpoint_path: Optional[str] = None,
     batch_size: int = 32,
     num_workers: int = 4,
     device: Optional[str] = None,
     save_gradcam: bool = False,
     gradcam_stage: Optional[int] = None,
+    gradcam_method: str = "gradcam",
 ) -> Path:
     """
     Run inference on the validation split and save per-date JSON outputs.
@@ -198,14 +212,10 @@ def run_inference_cnn(
         collate_fn=cnn_collate_fn,
     )
 
-    in_chans = 3 if image_mode == "stack" else 1
-
+    in_chans = 3 if image_mode == "stack" else 2 if image_mode in {"candle_gaf", "candle_rp"} else 1
     aux_dim = 0
     if use_aux:
-        if aux_type in {"volume", "both"}:
-            aux_dim += len(VOLUME_COLUMNS)
-        if aux_type in {"news", "both"}:
-            aux_dim += dataset.news_dim
+        aux_dim += dataset.news_dim
 
     model = CNN(
         backbone=backbone,
@@ -272,12 +282,13 @@ def run_inference_cnn(
                 images,
                 aux,
                 candidate_stages=[-4, -3, -2, -1],
+                gradcam_method=gradcam_method,
             )
             gradcam_stage = auto_stage
 
         target_layer = _select_gradcam_layer(model.backbone, backbone, gradcam_stage)
         if target_layer is not None:
-            gradcam = GradCAM(model, target_layer)
+            gradcam = GradCAM(model, target_layer, method=gradcam_method)
             gradcam_root.mkdir(parents=True, exist_ok=True)
             gradcam_stats_path = gradcam_root / "gradcam_stats.jsonl"
             gradcam_stats_fh = gradcam_stats_path.open("w", encoding="utf-8")
@@ -286,6 +297,8 @@ def run_inference_cnn(
                 target_layer.__class__.__name__,
                 "stage:",
                 gradcam_stage,
+                "method:",
+                gradcam_method,
             )
         else:
             print("Warning: Grad-CAM skipped (no suitable conv layer found).")
@@ -319,6 +332,7 @@ def run_inference_cnn(
                 "h20": float(severity_scores[3]),
             }
             severity_level = _build_severity_levels(raw_returns, q80, q90, q95)
+            severity_level_pred = _build_severity_levels_from_values(severity_scores, q80, q90, q95)
 
             payload = {
                 "meta": {
@@ -334,6 +348,7 @@ def run_inference_cnn(
                 "scores": {
                     "severity": severity,
                     "severity_level": severity_level,
+                    "severity_level_pred": severity_level_pred,
                     "raw_returns": {
                         "h1": float(raw_returns[0]),
                         "h5": float(raw_returns[1]),
@@ -367,6 +382,7 @@ def run_inference_cnn(
                                     "horizon": horizon,
                                     "pred": pred_val,
                                     "stage": gradcam_stage,
+                                    "method": gradcam_method,
                                     "cam": stats,
                                 },
                                 ensure_ascii=False,

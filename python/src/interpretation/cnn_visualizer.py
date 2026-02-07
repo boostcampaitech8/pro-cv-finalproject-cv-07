@@ -78,6 +78,7 @@ def _extract_threshold(q_values, idx: int, horizon: int) -> Optional[float]:
 
 def plot_severity_timeline(
     severity: Union[np.ndarray, torch.Tensor, Sequence[Sequence[float]]],
+    actual: Optional[Union[np.ndarray, torch.Tensor, Sequence[Sequence[float]]]] = None,
     dates: Optional[Sequence[str]] = None,
     q80: Optional[Union[Sequence[float], Dict]] = None,
     q90: Optional[Union[Sequence[float], Dict]] = None,
@@ -97,6 +98,14 @@ def plot_severity_timeline(
     if severity_np.shape[1] != len(HORIZONS):
         raise ValueError("Severity must have shape [N, 4] for horizons [1,5,10,20].")
 
+    actual_np: Optional[np.ndarray] = None
+    if actual is not None:
+        actual_np = _to_numpy(actual).astype(np.float32)
+        if actual_np.ndim == 1:
+            actual_np = actual_np[None, :]
+        if actual_np.shape[1] != len(HORIZONS):
+            raise ValueError("Actual returns must have shape [N, 4] for horizons [1,5,10,20].")
+
     num_points = severity_np.shape[0]
     x_values = list(range(num_points)) if dates is None else list(dates)
 
@@ -106,7 +115,15 @@ def plot_severity_timeline(
 
     for idx, horizon in enumerate(HORIZONS):
         ax = axes[idx]
-        ax.plot(x_values, severity_np[:, idx], label=f"h{horizon}", color="tab:blue")
+        ax.plot(x_values, severity_np[:, idx], label=f"pred_h{horizon}", color="tab:blue")
+        if actual_np is not None:
+            ax.plot(
+                x_values,
+                actual_np[:, idx],
+                label=f"actual_h{horizon}",
+                color="tab:green",
+                alpha=0.6,
+            )
 
         q80_val = _extract_threshold(q80, idx, horizon)
         q90_val = _extract_threshold(q90, idx, horizon)
@@ -122,6 +139,23 @@ def plot_severity_timeline(
         ax.set_ylabel(f"h{horizon}")
         ax.grid(True, linestyle=":", linewidth=0.5, alpha=0.6)
         ax.legend(loc="upper right", fontsize=8)
+
+    if dates is not None:
+        # Reduce tick density for readability
+        max_ticks = 12
+        if num_points > max_ticks:
+            step = max(1, num_points // max_ticks)
+            tick_idx = list(range(0, num_points, step))
+            if tick_idx[-1] != num_points - 1:
+                tick_idx.append(num_points - 1)
+            tick_vals = [x_values[i] for i in tick_idx]
+            for ax in axes:
+                ax.set_xticks(tick_vals)
+        for ax in axes:
+            for label in ax.get_xticklabels():
+                label.set_rotation(90)
+                label.set_ha("right")
+                label.set_fontsize(8)
 
     axes[-1].set_xlabel("Date" if dates is not None else "Index")
     fig.suptitle(title)
@@ -267,9 +301,17 @@ class GradCAM:
     4. Per-sample normalization
     """
 
-    def __init__(self, model: torch.nn.Module, target_layer: torch.nn.Module) -> None:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        target_layer: torch.nn.Module,
+        method: str = "gradcam",
+    ) -> None:
         self.model = model
         self.target_layer = target_layer
+        self.method = method.lower().strip()
+        if self.method not in {"gradcam", "layercam"}:
+            raise ValueError("GradCAM method must be 'gradcam' or 'layercam'.")
         self._activations = None
         self._gradients = None
         self._handles = []
@@ -321,8 +363,13 @@ class GradCAM:
                 "Grad-CAM hooks did not capture activations/gradients."
             )
 
-        weights = self._gradients.mean(dim=(2, 3), keepdim=True)
-        cam = (weights * self._activations).sum(dim=1)
+        if self.method == "gradcam":
+            weights = self._gradients.mean(dim=(2, 3), keepdim=True)
+            cam = (weights * self._activations).sum(dim=1)
+        else:
+            # LayerCAM: emphasize spatially localized positive gradients
+            cam = torch.relu(self._gradients) * self._activations
+            cam = cam.sum(dim=1)
         cam = torch.relu(cam)
         cam_min = cam.amin(dim=(1, 2), keepdim=True)
         cam_max = cam.amax(dim=(1, 2), keepdim=True)

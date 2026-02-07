@@ -324,7 +324,13 @@ def train_cnn(
                 break
 
     if best_state is not None:
-        model.load_state_dict(best_state["model_state_dict"])
+        # NOTE: Torch 2.1 + ConvNeXt depthwise conv can throw aliasing errors on load.
+        # Clone tensors to break shared storage before loading.
+        state_dict = best_state.get("model_state_dict", {})
+        safe_state_dict = {
+            k: (v.clone() if torch.is_tensor(v) else v) for k, v in state_dict.items()
+        }
+        model.load_state_dict(safe_state_dict)
 
     final_metrics = {
         "per_horizon": best_metrics,

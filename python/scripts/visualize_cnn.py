@@ -1,16 +1,11 @@
 import argparse
 import json
-import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
+from src.data.dataset_cnn import CNNDataset
 from src.interpretation.cnn_visualizer import (
     overlay_gradcam_on_candlestick,
     plot_fusion_contribution,
@@ -18,204 +13,287 @@ from src.interpretation.cnn_visualizer import (
     plot_severity_timeline,
 )
 
-
 HORIZONS = [1, 5, 10, 20]
 
-
-def _make_radial_heatmap(size: int, intensity: float) -> np.ndarray:
-    yy, xx = np.mgrid[0:size, 0:size]
-    center = (size - 1) / 2.0
-    sigma = size / 5.0
-    dist_sq = (xx - center) ** 2 + (yy - center) ** 2
-    heatmap = np.exp(-dist_sq / (2 * sigma ** 2))
-    return heatmap * float(intensity)
+MODE_DIR = {
+    "candle": "candlestick",
+    "gaf": "GAF",
+    "rp": "RP",
+    "stack": "candlestick",
+}
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Visualize CNN inference results.")
-    parser.add_argument("--commodity", required=True, type=str)
-    parser.add_argument("--exp_name", required=True, type=str)
-    parser.add_argument("--fold", required=True, type=int)
-    return parser.parse_args()
+def _resolve_results_dir(root: Path, exp_name: str, fold: int) -> Path:
+    direct = root / exp_name / f"fold_{fold}" / "results"
+    if direct.exists():
+        return direct
+    # Try nested layouts: **/{exp_name}/fold_{fold}/results
+    matches = list(root.glob(f"**/{exp_name}/fold_{fold}/results"))
+    if matches:
+        return matches[0]
+    raise FileNotFoundError(f"results dir not found for {exp_name} fold {fold}")
 
 
-def _load_results(results_dir: Path) -> List[Dict]:
-    if not results_dir.exists():
-        raise FileNotFoundError(f"Results directory not found: {results_dir}")
-
-    records: List[Dict] = []
-    for path in sorted(results_dir.glob("*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        meta = data.get("meta", {})
-        date_str = meta.get("date", path.stem)
-        scores = data.get("scores", {}).get("severity", {})
-        severity = [
-            float(scores.get("h1", 0.0)),
-            float(scores.get("h5", 0.0)),
-            float(scores.get("h10", 0.0)),
-            float(scores.get("h20", 0.0)),
-        ]
-        records.append(
-            {
-                "date": date_str,
-                "meta": meta,
-                "severity": severity,
-            }
-        )
-
-    def _sort_key(item: Dict):
-        try:
-            return datetime.fromisoformat(item["date"])
-        except ValueError:
-            return item["date"]
-
-    records.sort(key=_sort_key)
-    return records
-
-
-def _compute_percentiles(severity: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    q80 = np.percentile(severity, 80, axis=0)
-    q90 = np.percentile(severity, 90, axis=0)
-    q95 = np.percentile(severity, 95, axis=0)
-    return q80, q90, q95
-
-
-def _resolve_image_path(
-    commodity: str, window: int, mode: str, date_str: str
+def _resolve_output_root(
+    vis_root: Path, pred_root: Path, results_dir: Path, exp_name: str, fold: int
 ) -> Path:
-    base = Path("src/datasets/preprocessing") / f"{commodity}_cnn_preprocessing"
-    folder = {
-        "candle": "candlestick",
-        "gaf": "GAF",
-        "rp": "RP",
-    }[mode]
-    return base / folder / f"w{window}" / f"{date_str}.png"
+    try:
+        rel = results_dir.relative_to(pred_root).parent
+        return vis_root / rel
+    except Exception:
+        return vis_root / exp_name / f"fold_{fold}"
+
+
+def _load_results(
+    results_dir: Path,
+) -> Tuple[List[str], Dict[str, List[float]], Dict[str, List[Optional[float]]], Dict]:
+    records = []
+    for p in results_dir.glob("*.json"):
+        records.append((p.name.replace(".json", ""), json.loads(p.read_text())))
+    records.sort(key=lambda x: x[0])
+
+    dates: List[str] = []
+    pred_series = {f"h{h}": [] for h in HORIZONS}
+    actual_series = {f"h{h}": [] for h in HORIZONS}
+
+    meta = {}
+    for date, payload in records:
+        dates.append(date)
+        meta = payload.get("meta", meta)
+        scores = payload.get("scores", {}).get("severity", {})
+        raw_returns = payload.get("scores", {}).get("raw_returns")
+        for h in HORIZONS:
+            h_key = f"h{h}"
+            pred_series[h_key].append(scores.get(h_key))
+            if raw_returns is not None:
+                actual_series[h_key].append(raw_returns.get(h_key))
+            else:
+                actual_series[h_key].append(None)
+
+    return dates, pred_series, actual_series, meta
+
+
+def _fill_actual_from_dataset(
+    dates: List[str],
+    actual_series: Dict[str, List[Optional[float]]],
+    commodity: str,
+    fold: int,
+    window: int,
+    image_mode: str,
+    use_aux: bool,
+    aux_type: str,
+) -> None:
+    # If raw_returns were not saved, reconstruct actuals from the dataset.
+    if not dates:
+        return
+    has_any_actual = any(v is not None for v in actual_series["h1"])
+    if has_any_actual:
+        return
+    try:
+        ds = CNNDataset(
+            commodity=commodity,
+            fold=fold,
+            split="val",
+            window_size=window,
+            image_mode=image_mode,
+            use_aux=use_aux,
+            aux_type=aux_type,
+        )
+        date_to_returns = {
+            ds.anchor_dates[i]: ds.anchor_returns[i] for i in range(len(ds.anchor_dates))
+        }
+        for i, date in enumerate(dates):
+            ret = date_to_returns.get(date)
+            if ret is None:
+                continue
+            for j, h in enumerate(HORIZONS):
+                actual_series[f"h{h}"][i] = float(ret[j])
+    except Exception:
+        # Fall back to pred-only if dataset lookup fails.
+        return
+
+
+def _compute_thresholds(
+    commodity: str,
+    fold: int,
+    window: int,
+    image_mode: str,
+    use_aux: bool,
+    aux_type: str,
+    pred_series: Dict[str, List[float]],
+    actual_series: Dict[str, List[Optional[float]]],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    q80 = q90 = q95 = None
+    try:
+        ds = CNNDataset(
+            commodity=commodity,
+            fold=fold,
+            split="val",
+            window_size=window,
+            image_mode=image_mode,
+            use_aux=use_aux,
+            aux_type=aux_type,
+        )
+        q80 = np.asarray(ds.q80, dtype=np.float32)
+        q90 = np.asarray(ds.q90, dtype=np.float32)
+        q95 = np.asarray(ds.q95, dtype=np.float32)
+        return q80, q90, q95
+    except Exception:
+        pass
+
+    # Fallback: derive thresholds from raw returns if present (abs value).
+    has_actual = any(v is not None for v in actual_series["h1"])
+    if has_actual:
+        abs_actual = [np.abs(np.asarray(actual_series[f"h{h}"], dtype=np.float32)) for h in HORIZONS]
+        q80 = np.asarray([np.nanpercentile(v, 80) for v in abs_actual], dtype=np.float32)
+        q90 = np.asarray([np.nanpercentile(v, 90) for v in abs_actual], dtype=np.float32)
+        q95 = np.asarray([np.nanpercentile(v, 95) for v in abs_actual], dtype=np.float32)
+        return q80, q90, q95
+
+    # Last resort: use prediction distribution.
+    q80 = np.nanpercentile([pred_series[k] for k in pred_series], 80, axis=1)
+    q90 = np.nanpercentile([pred_series[k] for k in pred_series], 90, axis=1)
+    q95 = np.nanpercentile([pred_series[k] for k in pred_series], 95, axis=1)
+    return np.asarray(q80), np.asarray(q90), np.asarray(q95)
 
 
 def main() -> None:
-    args = parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--commodity", required=True)
+    parser.add_argument("--exp_name", required=True)
+    parser.add_argument("--fold", type=int, required=True)
+    args = parser.parse_args()
 
-    results_dir = (
-        Path("src/outputs/predictions/cnn")
-        / args.commodity
-        / args.exp_name
-        / f"fold_{args.fold}"
-        / "results"
+    pred_root = Path("src/outputs/predictions/cnn") / args.commodity
+    vis_root = Path("src/outputs/visualizations/cnn") / args.commodity
+
+    results_dir = _resolve_results_dir(pred_root, args.exp_name, args.fold)
+    out_root = _resolve_output_root(vis_root, pred_root, results_dir, args.exp_name, args.fold)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    dates, pred_series, actual_series, meta = _load_results(results_dir)
+    if not dates:
+        raise SystemExit(f"No results found in {results_dir}")
+
+    window = int(meta.get("window", 20))
+    image_mode = meta.get("image_mode", "candle")
+    aux_type = meta.get("aux_type", "none")
+    fusion = meta.get("fusion", "none")
+    use_aux = aux_type not in ("none", None)
+
+    _fill_actual_from_dataset(
+        dates,
+        actual_series,
+        args.commodity,
+        args.fold,
+        window,
+        image_mode,
+        use_aux,
+        aux_type,
     )
-    output_root = (
-        Path("src/outputs/visualizations/cnn")
-        / args.commodity
-        / args.exp_name
-        / f"fold_{args.fold}"
+
+    q80, q90, q95 = _compute_thresholds(
+        args.commodity,
+        args.fold,
+        window,
+        image_mode,
+        use_aux,
+        aux_type,
+        pred_series,
+        actual_series,
     )
-    output_root.mkdir(parents=True, exist_ok=True)
 
-    records = _load_results(results_dir)
-    if not records:
-        print("No result JSON files found.")
-        return
+    # Build [N,4] arrays for plotting (replace None with NaN)
+    severity_mat = np.asarray(
+        [[pred_series[f"h{h}"][i] for h in HORIZONS] for i in range(len(dates))],
+        dtype=np.float32,
+    )
+    actual_mat = None
+    if any(v is not None for v in actual_series["h1"]):
+        actual_mat = np.asarray(
+            [
+                [
+                    (actual_series[f"h{h}"][i] if actual_series[f"h{h}"][i] is not None else np.nan)
+                    for h in HORIZONS
+                ]
+                for i in range(len(dates))
+            ],
+            dtype=np.float32,
+        )
 
-    dates = [record["date"] for record in records]
-    severity = np.array([record["severity"] for record in records], dtype=np.float32)
-    severity_min = severity.min(axis=0)
-    severity_max = severity.max(axis=0)
-    severity_range = severity_max - severity_min
-    safe_range = np.where(severity_range < 1e-6, 1.0, severity_range)
-    severity_norm = (severity - severity_min) / safe_range
-    if np.any(severity_range < 1e-6):
-        severity_norm[:, severity_range < 1e-6] = 0.5
-
-    q80, q90, q95 = _compute_percentiles(severity)
-
-    timeline_path = output_root / "severity_timeline.png"
+    timeline_path = out_root / "severity_timeline.png"
     plot_severity_timeline(
-        severity=severity,
+        severity_mat,
+        actual=actual_mat,
         dates=dates,
         q80=q80,
         q90=q90,
         q95=q95,
         output_path=timeline_path,
-        title="Severity Timeline (q80/q90/q95)",
+    )
+    # Also save a pred-only view so small variations aren't visually flattened
+    # by the much larger scale of actual returns.
+    pred_only_path = out_root / "severity_timeline_pred_only.png"
+    plot_severity_timeline(
+        severity_mat,
+        actual=None,
+        dates=dates,
+        q80=q80,
+        q90=q90,
+        q95=q95,
+        output_path=pred_only_path,
+        title="Severity Timeline (Pred Only)",
     )
 
-    meta_ref = records[0]["meta"]
-    window_size = int(meta_ref.get("window", 20))
-    image_mode = meta_ref.get("image_mode", "candle")
-    fusion = meta_ref.get("fusion", "none")
+    # Per-date visualizations
+    preprocess_root = (
+        Path("src/datasets/preprocessing") / f"{args.commodity}_cnn_preprocessing"
+    )
+    candle_dir = preprocess_root / MODE_DIR["candle"] / f"w{window}"
+    if image_mode in MODE_DIR:
+        img_dir = preprocess_root / MODE_DIR[image_mode] / f"w{window}"
+    else:
+        img_dir = candle_dir
 
-    overlay_root = output_root / "gradcam_overlays"
-    overlay_root.mkdir(parents=True, exist_ok=True)
-    gradcam_root = results_dir / "gradcam"
-
-    for idx, record in enumerate(records):
-        date_str = record["date"]
-        candle_path = _resolve_image_path(args.commodity, window_size, "candle", date_str)
-        if not candle_path.exists():
-            continue
-        for h_idx, horizon in enumerate(HORIZONS):
-            overlay_path = overlay_root / f"h{horizon}" / f"{date_str}.png"
-            overlay_path.parent.mkdir(parents=True, exist_ok=True)
-            gradcam_path = gradcam_root / f"h{horizon}" / f"{date_str}.npy"
-            if gradcam_path.exists():
-                heatmap = np.load(gradcam_path)
-            else:
-                intensity = float(severity_norm[idx, h_idx])
-                if not np.isfinite(intensity):
-                    intensity = 0.5
-                heatmap = _make_radial_heatmap(224, intensity)
-            overlay_gradcam_on_candlestick(
-                candlestick_image=candle_path,
-                gradcam=heatmap,
-                output_path=overlay_path,
-            )
-
-    if image_mode in {"gaf", "stack"}:
-        gaf_root = output_root / "gaf_heatmaps"
-        gaf_root.mkdir(parents=True, exist_ok=True)
-        for record in records:
-            date_str = record["date"]
-            gaf_path = _resolve_image_path(args.commodity, window_size, "gaf", date_str)
-            if not gaf_path.exists():
+    grad_root = results_dir / "gradcam"
+    if grad_root.exists():
+        for h in HORIZONS:
+            h_dir = grad_root / f"h{h}"
+            if not h_dir.exists():
                 continue
-            plot_gaf_rp_heatmap(
-                image=gaf_path,
-                output_path=gaf_root / f"{date_str}.png",
-                title="GAF Heatmap",
-            )
+            out_dir = out_root / "gradcam_overlays" / f"h{h}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for date in dates:
+                cam_path = h_dir / f"{date}.npy"
+                if not cam_path.exists():
+                    continue
+                img_path = candle_dir / f"{date}.png"
+                if not img_path.exists():
+                    continue
+                overlay_path = out_dir / f"{date}.png"
+                overlay_gradcam_on_candlestick(img_path, cam_path, overlay_path)
 
-    if image_mode in {"rp", "stack"}:
-        rp_root = output_root / "rp_heatmaps"
-        rp_root.mkdir(parents=True, exist_ok=True)
-        for record in records:
-            date_str = record["date"]
-            rp_path = _resolve_image_path(args.commodity, window_size, "rp", date_str)
-            if not rp_path.exists():
-                continue
-            plot_gaf_rp_heatmap(
-                image=rp_path,
-                output_path=rp_root / f"{date_str}.png",
-                title="RP Heatmap",
-            )
+    # GAF/RP heatmaps
+    if image_mode in ("gaf", "rp", "stack"):
+        modes = ["gaf", "rp"] if image_mode == "stack" else [image_mode]
+        for mode in modes:
+            heat_dir = out_root / f"{mode}_heatmaps"
+            heat_dir.mkdir(parents=True, exist_ok=True)
+            mode_dir = preprocess_root / MODE_DIR[mode] / f"w{window}"
+            for date in dates:
+                img_path = mode_dir / f"{date}.png"
+                if img_path.exists():
+                    plot_gaf_rp_heatmap(img_path, heat_dir / f"{date}.png")
 
-    if fusion in {"gated", "cross_attn"}:
-        fusion_path = output_root / "fusion_contribution.png"
-        if fusion == "gated":
-            plot_fusion_contribution(
-                fusion="gated",
-                output_path=fusion_path,
-                image_score=0.5,
-                aux_score=0.5,
-                title="Gated Fusion Contribution (placeholder)",
-            )
-        else:
-            plot_fusion_contribution(
-                fusion="cross_attn",
-                output_path=fusion_path,
-                attention_weights=np.array([1.0], dtype=np.float32),
-                title="Cross-Attention Summary (placeholder)",
-            )
+    # Fusion contribution (only if data is available in JSON)
+    if fusion in ("gated", "cross_attn"):
+        contrib = meta.get("fusion_contrib")
+        if contrib is not None:
+            out_dir = out_root / "fusion_contrib"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            plot_fusion_contribution(contrib, out_dir / "fusion_contrib.png", fusion=fusion)
 
-    print(f"Visualizations saved to: {output_root}")
+    print(f"Visualizations saved to: {out_root}")
 
 
 if __name__ == "__main__":

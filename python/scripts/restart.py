@@ -176,11 +176,12 @@ def main(cfg: TrainConfig):
     
     feature_cols = [
         c for c in pd.concat(df.values(), ignore_index=True).columns
-        if c not in ["time", "item_id", "close", "time_idx", "time_idx_int","EMA_20","EMA_50",'EMA_100']
+        if c not in ["time", "item_id", "close", "time_idx", "time_idx_int","EMA_20","EMA_50",'EMA_100','Volume']
         and not c.startswith("log_return_") 
     ]
     feature_cols = [c for c in feature_cols if c not in SENT_RATIOS and c not in TIME_RATIOS]
-    feature_cols += ["rv_5", "rv_10"]#, "abs_ret"]df["abs_ret"] = np.abs(df["ret"])
+    feature_cols = [c for c in feature_cols if c not in SENT_SCORES and c not in TIME_SCORES] 
+    #feature_cols += ["rv_5", "rv_10"]#, "abs_ret"]df["abs_ret"] = np.abs(df["ret"])
     # lag features (1-day shift)
     # for name in list(df.keys()):
     #     df[name] = lag_features_by_1day(df[name], feature_cols, group_col="item_id", time_col="time")
@@ -265,20 +266,44 @@ def main(cfg: TrainConfig):
                 item_id = str(getattr(fcst, "item_id", "")).strip()
                 pred_start_ts = fcst.start_date.to_timestamp()
                 dfi = df_by_item.get(item_id)
-                
-   
-  
-   
-                
-                # try:
-                #     # 'time' 기준 현재 예측 지점 인덱스 찾기
-                current_idx = dfi[dfi['time_idx'] == pred_start_ts]
-                base_close = float(dfi.loc[current_idx , "close"])
-                true_close = dfi.loc[current_idx : current_idx + prediction_length - 1, "close"].values
+                if dfi is None or dfi.empty:
+                    continue
 
-                
-                base_closes.append(base_close); true_close_list.append(true_close); valid_indices.append(i)
-                # except: continue
+                # pred_start_ts를 tz-naive Timestamp로 통일
+                if hasattr(fcst.start_date, "to_timestamp"):
+                    pred_start_ts = fcst.start_date.to_timestamp()
+                else:
+                    pred_start_ts = pd.Timestamp(fcst.start_date)
+                if getattr(pred_start_ts, "tz", None) is not None:
+                    pred_start_ts = pred_start_ts.tz_localize(None)
+
+                # time_idx와 pred를 둘 다 datetime64[ns]로 통일
+                times = pd.to_datetime(dfi["time_idx"], utc=False).to_numpy(dtype="datetime64[ns]")
+                pred = np.datetime64(pd.Timestamp(pred_start_ts).to_datetime64())
+#분포 , 형한테서 output .csv 값 만들고 다른 에서 concat . plot도 같이하는게  따로 저장한다고 
+# 색깔? 이런걸로 구분? / 같이 이미지 있는게 아니다..? df . model 하나# 모델별로 csv로 저장하고/ 합치는 코드가 있어야되잖아./합치는 거를 또 저장/ 
+# vlm 어찌됐든 주는거는 그냥 plot해서 내 분포 그리고 형 예측값 ...... 이미지로 쓸꺼잖아 .# 양식 통일 VLM 값도
+#근데 내 기억으로는 close로 하기로 했던 것같은데... 근데 약간 참고지표 느낌이잖아그거는 뭐 해보ㅈ
+                # 정렬/매칭 확인
+                pos = int(np.searchsorted(times, pred))
+                if pos >= len(times) or times[pos] != pred:
+                    # 정확 매칭이 없으면 flatnonzero로 한 번 더 시도
+                    mask = pd.to_datetime(dfi["time_idx"], utc=False).eq(pd.Timestamp(pred_start_ts))
+                    if not mask.any():
+                        continue
+                    pos = int(np.flatnonzero(mask.to_numpy())[0])
+
+                end = pos + prediction_length
+                if end > len(dfi):
+                    continue
+
+                base_close = float(dfi["close"].iloc[pos])
+                true_close = dfi["close"].iloc[pos:end].to_numpy()
+
+                base_closes.append(base_close)
+                true_close_list.append(true_close)
+                valid_indices.append(i)
+
             
             forecasts = [forecasts[i] for i in valid_indices]
             tss = [tss[i] for i in valid_indices]

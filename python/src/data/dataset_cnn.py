@@ -11,15 +11,8 @@ from torch.utils.data._utils.collate import default_collate
 
 
 HORIZONS = [1, 5, 10, 20]
-VOLUME_COLUMNS = [
-    "Volume",
-    "vol_return_7d",
-    "vol_volume_7d",
-    "vol_return_14d",
-    "vol_volume_14d",
-    "vol_return_21d",
-    "vol_volume_21d",
-]
+# Volume-based auxiliary features are intentionally disabled.
+VOLUME_COLUMNS: List[str] = []
 IMAGE_MODE_TO_FOLDER = {
     "candle": "candlestick",
     "gaf": "GAF",
@@ -139,14 +132,14 @@ class CNNDataset(Dataset):
         window_size: int,
         image_mode: str,
         use_aux: bool = False,
-        aux_type: str = "volume",
+        aux_type: str = "news",
     ) -> None:
         if split not in {"train", "val"}:
             raise ValueError("split must be 'train' or 'val'.")
-        if image_mode not in {"candle", "gaf", "rp", "stack"}:
-            raise ValueError("image_mode must be 'candle', 'gaf', 'rp', or 'stack'.")
-        if aux_type not in {"volume", "news", "both"}:
-            raise ValueError("aux_type must be 'volume', 'news', or 'both'.")
+        if image_mode not in {"candle", "gaf", "rp", "stack", "candle_gaf", "candle_rp"}:
+            raise ValueError("image_mode must be 'candle', 'gaf', 'rp', 'stack', 'candle_gaf', or 'candle_rp'.")
+        if aux_type != "news":
+            raise ValueError("aux_type must be 'news' (volume features disabled).")
 
         self.commodity = commodity
         self.fold = fold
@@ -194,16 +187,9 @@ class CNNDataset(Dataset):
 
         self.q80, self.q90, self.q95 = self._get_severity_thresholds(fold_data)
 
-        if self.use_aux and self.aux_type in {"volume", "both"}:
-            missing_volume = [col for col in VOLUME_COLUMNS if col not in self.df.columns]
-            if missing_volume:
-                raise ValueError(
-                    f"Missing volume columns for aux features: {missing_volume}"
-                )
-
         self.news_embeddings: Dict[str, np.ndarray] = {}
         self.news_dim = 0
-        if self.use_aux and self.aux_type in {"news", "both"}:
+        if self.use_aux and self.aux_type == "news":
             self.news_embeddings, self.news_dim = _load_news_features(self.news_path)
             if self.news_dim == 0:
                 self.news_dim = 512
@@ -322,6 +308,14 @@ class CNNDataset(Dataset):
             gaf = self._load_single_image("gaf", date_str)
             rp = self._load_single_image("rp", date_str)
             image = np.stack([candle, gaf, rp], axis=0)
+        elif self.image_mode == "candle_gaf":
+            candle = self._load_single_image("candle", date_str)
+            gaf = self._load_single_image("gaf", date_str)
+            image = np.stack([candle, gaf], axis=0)
+        elif self.image_mode == "candle_rp":
+            candle = self._load_single_image("candle", date_str)
+            rp = self._load_single_image("rp", date_str)
+            image = np.stack([candle, rp], axis=0)
         else:
             single = self._load_single_image(self.image_mode, date_str)
             image = single[None, :, :]
@@ -340,14 +334,7 @@ class CNNDataset(Dataset):
 
         aux_parts: List[np.ndarray] = []
 
-        if self.aux_type in {"volume", "both"}:
-            window = self.df.iloc[anchor_index - self.window_size + 1 : anchor_index + 1]
-            volume_values = window[VOLUME_COLUMNS].to_numpy(dtype=np.float32)
-            # Mean-pool volume features over the lookback window.
-            volume_features = volume_values.mean(axis=0)
-            aux_parts.append(volume_features)
-
-        if self.aux_type in {"news", "both"}:
+        if self.aux_type == "news":
             embedding = self.news_embeddings.get(anchor_date)
             if embedding is None:
                 embedding = np.zeros(self.news_dim, dtype=np.float32)

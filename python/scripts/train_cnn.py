@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.data.dataset_cnn import CNNDataset, VOLUME_COLUMNS, cnn_collate_fn
+from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
 from src.engine.trainer_cnn import train_cnn
 from src.models.CNN import CNN
 from src.utils.set_seed import set_seed
@@ -24,11 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", required=True, type=int)
 
     parser.add_argument("--window_size", choices=[5, 20, 60], type=int, required=True)
-    parser.add_argument("--image_mode", choices=["candle", "gaf", "rp", "stack"], required=True)
+    parser.add_argument("--image_mode", choices=["candle", "gaf", "rp", "stack", "candle_gaf", "candle_rp"], required=True)
     parser.add_argument("--backbone", choices=["convnext_tiny", "resnet50", "vit_small"], required=True)
 
     parser.add_argument("--use_aux", action="store_true")
-    parser.add_argument("--aux_type", choices=["volume", "news", "both"], default="volume")
+    parser.add_argument("--aux_type", choices=["news"], default="news")
     parser.add_argument("--fusion", choices=["none", "late", "gated", "cross_attn"], default="none")
 
     parser.add_argument("--loss", choices=["smooth_l1", "mse"], default="smooth_l1")
@@ -109,14 +109,10 @@ def main() -> None:
         collate_fn=cnn_collate_fn,
     )
 
-    in_chans = 3 if args.image_mode == "stack" else 1
-
+    in_chans = 3 if args.image_mode == "stack" else 2 if args.image_mode in {"candle_gaf", "candle_rp"} else 1
     aux_dim = 0
     if args.use_aux:
-        if args.aux_type in {"volume", "both"}:
-            aux_dim += len(VOLUME_COLUMNS)
-        if args.aux_type in {"news", "both"}:
-            aux_dim += train_ds.news_dim
+        aux_dim += train_ds.news_dim
 
     model = CNN(
         backbone=args.backbone,
