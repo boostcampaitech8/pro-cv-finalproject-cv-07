@@ -46,6 +46,14 @@ from utils.add_embedding import add_article_embedding
 from utils.vectordb_utils import connect_vector_db, create_collection, push_data
 
 
+def _map_keyword_to_asset_group(value) -> str:
+    """Map raw keyword into coarse asset groups used in summaries."""
+    keyword = str(value).strip().lower() if pd.notna(value) else ""
+    if keyword in {"gold", "silver", "copper"}:
+        return "metal"
+    return "agriculture"
+
+
 def generate_embeddings(df: pd.DataFrame, entities_df: pd.DataFrame, triples_df: pd.DataFrame) -> dict:
     """
     Embedding 생성 (Bearer Token 방식)
@@ -326,48 +334,71 @@ def run_pipeline(
 
         # Daily Summary 저장 (임베딩이 있을 때만)
         if embeddings and 'embedding' in relevant_df.columns:
-            collect_date = relevant_df['collect_date'].iloc[0]
-            collect_date_count = len(df)  # T 필터 전 전체 기사 수
-            article_emb_array = np.array(embeddings['article_embeddings'])
-            news_embedding_mean = article_emb_array.mean(axis=0).tolist()
+            summary_df = relevant_df.copy()
+            if 'key_word' in summary_df.columns:
+                summary_df['summary_key_word'] = summary_df['key_word'].apply(_map_keyword_to_asset_group)
+            else:
+                summary_df['summary_key_word'] = 'agriculture'
 
-            # sentiment / timeframe 집계 (feature_.py add_news_imformation_features 와 동일)
-            news_features = None
-            has_sentiment = 'sentiment_label' in relevant_df.columns
-            has_timeframe = 'timeframe_label' in relevant_df.columns
+            # T/F 필터 전 전체 기사 수를 카테고리 기준으로 계산
+            raw_group_counts = {}
+            if 'key_word' in df.columns:
+                raw_group_counts = (
+                    df['key_word']
+                    .apply(_map_keyword_to_asset_group)
+                    .value_counts()
+                    .to_dict()
+                )
 
-            if has_sentiment or has_timeframe:
-                news_features = {}
+            for summary_key_word, group_df in summary_df.groupby('summary_key_word', sort=False):
+                collect_date = group_df['collect_date'].iloc[0]
+                collect_date_count = int(raw_group_counts.get(summary_key_word, len(group_df)))
+                article_emb_array = np.array(group_df['embedding'].tolist())
+                news_embedding_mean = article_emb_array.mean(axis=0).tolist()
 
-                if has_sentiment:
-                    # score 통계: mean, std, max, min
-                    news_features['sentiment_score_mean'] = float(relevant_df['sentiment_score'].mean())
-                    news_features['sentiment_score_std'] = float(relevant_df['sentiment_score'].std())
-                    news_features['sentiment_score_max'] = float(relevant_df['sentiment_score'].max())
-                    news_features['sentiment_score_min'] = float(relevant_df['sentiment_score'].min())
-                    # label 비율: normalize=True → 비율
-                    sent_ratio = relevant_df['sentiment_label'].value_counts(normalize=True)
-                    news_features['sentiment_neg_ratio'] = float(sent_ratio.get('negative', 0))
-                    news_features['sentiment_neu_ratio'] = float(sent_ratio.get('neutral', 0))
-                    news_features['sentiment_pos_ratio'] = float(sent_ratio.get('positive', 0))
+                # sentiment / timeframe 집계 (feature_.py add_news_imformation_features 와 동일)
+                news_features = None
+                has_sentiment = 'sentiment_label' in group_df.columns
+                has_timeframe = 'timeframe_label' in group_df.columns
 
-                if has_timeframe:
-                    news_features['timeframe_score_mean'] = float(relevant_df['timeframe_score'].mean())
-                    news_features['timeframe_score_std'] = float(relevant_df['timeframe_score'].std())
-                    news_features['timeframe_score_max'] = float(relevant_df['timeframe_score'].max())
-                    news_features['timeframe_score_min'] = float(relevant_df['timeframe_score'].min())
-                    tf_ratio = relevant_df['timeframe_label'].value_counts(normalize=True)
-                    news_features['time_past_ratio'] = float(tf_ratio.get('past', 0))
-                    news_features['time_present_ratio'] = float(tf_ratio.get('present', 0))
-                    news_features['time_future_ratio'] = float(tf_ratio.get('future', 0))
+                if has_sentiment or has_timeframe:
+                    news_features = {}
 
-            save_daily_summary(
-                collect_date, collect_date_count, news_embedding_mean,
-                news_features=news_features,
-            )
-            print(f"  Daily Summary: count={collect_date_count}, embedding_dim={len(news_embedding_mean)}")
-            if news_features:
-                print(f"  Features: {list(news_features.keys())}")
+                    if has_sentiment:
+                        # score 통계: mean, std, max, min
+                        news_features['sentiment_score_mean'] = float(group_df['sentiment_score'].mean())
+                        news_features['sentiment_score_std'] = float(group_df['sentiment_score'].std())
+                        news_features['sentiment_score_max'] = float(group_df['sentiment_score'].max())
+                        news_features['sentiment_score_min'] = float(group_df['sentiment_score'].min())
+                        # label 비율: normalize=True → 비율
+                        sent_ratio = group_df['sentiment_label'].value_counts(normalize=True)
+                        news_features['sentiment_neg_ratio'] = float(sent_ratio.get('negative', 0))
+                        news_features['sentiment_neu_ratio'] = float(sent_ratio.get('neutral', 0))
+                        news_features['sentiment_pos_ratio'] = float(sent_ratio.get('positive', 0))
+
+                    if has_timeframe:
+                        news_features['timeframe_score_mean'] = float(group_df['timeframe_score'].mean())
+                        news_features['timeframe_score_std'] = float(group_df['timeframe_score'].std())
+                        news_features['timeframe_score_max'] = float(group_df['timeframe_score'].max())
+                        news_features['timeframe_score_min'] = float(group_df['timeframe_score'].min())
+                        tf_ratio = group_df['timeframe_label'].value_counts(normalize=True)
+                        news_features['time_past_ratio'] = float(tf_ratio.get('past', 0))
+                        news_features['time_present_ratio'] = float(tf_ratio.get('present', 0))
+                        news_features['time_future_ratio'] = float(tf_ratio.get('future', 0))
+
+                save_daily_summary(
+                    collect_date,
+                    collect_date_count,
+                    news_embedding_mean,
+                    news_features=news_features,
+                    key_word=summary_key_word,
+                )
+                print(
+                    f"  Daily Summary[{summary_key_word}]: "
+                    f"count={collect_date_count}, embedding_dim={len(news_embedding_mean)}"
+                )
+                if news_features:
+                    print(f"  Features[{summary_key_word}]: {list(news_features.keys())}")
 
     # ========================================
     # CSV 저장 (선택)
