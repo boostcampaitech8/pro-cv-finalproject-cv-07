@@ -199,6 +199,7 @@ def verify_predicates(
     description: str,
     kg: dict,
     model_name: str = None,
+    client=None,
 ) -> dict:
     """Keep nodes/ids fixed and re-align relationship predicate to text.
     Uses OpenAI API (nano/mini model) for verification."""
@@ -210,7 +211,8 @@ def verify_predicates(
         return {"nodes": nodes, "relationships": []}
 
     nano = model_name or DEFAULT_NANO_MODEL
-    client = _openai_client()
+    if client is None:
+        client = _openai_client()
 
     nodes_json = json.dumps(nodes, ensure_ascii=False)
     rels_json = json.dumps(rels, ensure_ascii=False)
@@ -300,11 +302,12 @@ def extract_kg_batch(
     # Step 2: OpenAI API로 predicate 검증 (병렬 4개)
     if verify_predicate_only and raw_results:
         print(f"  Verifying predicates ({len(raw_results)} articles, 4 workers)...")
+        client = _openai_client()
 
         def _verify_one(item):
             idx, title, desc, kg = item
             try:
-                verified = verify_predicates(title, desc, kg)
+                verified = verify_predicates(title, desc, kg, client=client)
                 return (idx, verified)
             except Exception as e:
                 print(f"    Verify error on row {idx}: {e}")
