@@ -6,6 +6,7 @@ import json
 import boto3
 from tqdm import tqdm
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class TitanEmbeddings(object):
     accept = "application/json"
@@ -59,9 +60,22 @@ def add_article_embedding(
         secret_access_key=secret_access_key,
         session_token=session_token,
     )
-    embs = []
-    for t in tqdm(texts, desc="Embedding generation"):
+    max_workers = 4
+
+    def _embed_one(idx_text):
+        idx, t = idx_text
         if t is None:
             t = ""
-        embs.append(titan(str(t), dimensions=dimensions, normalize=normalize))
+        return idx, titan(str(t), dimensions=dimensions, normalize=normalize)
+
+    embs = [None] * len(texts)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_embed_one, (i, t)): i
+            for i, t in enumerate(texts)
+        }
+        for future in tqdm(as_completed(futures), total=len(texts), desc="Embedding generation"):
+            idx, embedding = future.result()
+            embs[idx] = embedding
+
     return embs
