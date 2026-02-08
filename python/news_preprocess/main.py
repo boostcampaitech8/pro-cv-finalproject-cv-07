@@ -166,6 +166,7 @@ def run_pipeline(
     skip_bigquery: bool = False,
     save_csv: bool = True,
     model_name: Optional[str] = None,
+    keep_model_loaded: bool = False,
 ) -> pd.DataFrame:
     """
     뉴스 수집 및 저장 파이프라인 실행
@@ -247,7 +248,8 @@ def run_pipeline(
     entities_df, triples_df = extract_kg_batch(relevant_df, model_name=model_name)
 
     # T/F 판단 + KG 추출 완료 후 모델 해제
-    unload_model()
+    if not keep_model_loaded:
+        unload_model()
 
     print(f"\nExtracted {len(entities_df)} entities, {len(triples_df)} triples")
 
