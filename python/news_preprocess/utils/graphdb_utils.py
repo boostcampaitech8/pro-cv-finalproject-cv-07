@@ -87,59 +87,71 @@ def _safe_embedding(value):
 def _create_nodes_and_relationships_batch(tx, batch_records):
     """
     배치로 노드와 관계 생성
-
-    Cypher 쿼리:
-    - ARTICLE 노드 생성/업데이트
-    - TRIPLE 노드 생성/업데이트
-    - ARTICLE -> TRIPLE (MENTIONS) 관계
-    - TRIPLE -> ENTITY (HAS_SUBJECT, HAS_OBJECT) 관계
-    - ARTICLE -> ENTITY (CONTAINS_ENTITY) 관계
+    triple이 None인 레코드는 ARTICLE 노드만 생성
     """
-    tx.run(
-        """
-        UNWIND $batch AS record
+    with_triple = [r for r in batch_records if r.get("triple") is not None]
+    without_triple = [r for r in batch_records if r.get("triple") is None]
 
-        // ARTICLE 노드
-        MERGE (a:ARTICLE {article_id: record.article.article_id})
-        SET a.type = record.article.type,
-            a.url = record.article.doc_url,
-            a.publish_date = record.article.publish_date,
-            a.collect_date = record.article.collect_date,
-            a.title = record.article.title,
-            a.meta_site = record.article.meta_site,
-            a.description = record.article.description,
-            a.embedding = record.article.embedding
-
-        // TRIPLE 노드
-        MERGE (t:TRIPLE {triple_id: record.triple.hash_id})
-        SET t.subject = record.triple.subject,
-            t.predicate = record.triple.predicate,
-            t.object = record.triple.object,
-            t.embedding = record.triple.embedding
-
-        // ARTICLE -> TRIPLE 관계
-        MERGE (a)-[:MENTIONS]->(t)
-
-        // SUBJECT ENTITY 노드 및 관계
-        FOREACH (subj IN record.subjects |
-            MERGE (s:ENTITY {entity_id: subj.hash_id})
-            SET s.entity_text = subj.entity_text,
-                s.embedding = subj.embedding
-            MERGE (t)-[:HAS_SUBJECT]->(s)
-            MERGE (a)-[:CONTAINS_ENTITY]->(s)
+    # ARTICLE만 저장 (triple 없는 경우)
+    if without_triple:
+        tx.run(
+            """
+            UNWIND $batch AS record
+            MERGE (a:ARTICLE {article_id: record.article.article_id})
+            SET a.type = record.article.type,
+                a.url = record.article.doc_url,
+                a.publish_date = record.article.publish_date,
+                a.collect_date = record.article.collect_date,
+                a.title = record.article.title,
+                a.meta_site = record.article.meta_site,
+                a.description = record.article.description,
+                a.embedding = record.article.embedding
+            """,
+            batch=without_triple
         )
 
-        // OBJECT ENTITY 노드 및 관계
-        FOREACH (obj IN record.objects |
-            MERGE (o:ENTITY {entity_id: obj.hash_id})
-            SET o.entity_text = obj.entity_text,
-                o.embedding = obj.embedding
-            MERGE (t)-[:HAS_OBJECT]->(o)
-            MERGE (a)-[:CONTAINS_ENTITY]->(o)
+    # ARTICLE + TRIPLE + ENTITY 저장
+    if with_triple:
+        tx.run(
+            """
+            UNWIND $batch AS record
+
+            MERGE (a:ARTICLE {article_id: record.article.article_id})
+            SET a.type = record.article.type,
+                a.url = record.article.doc_url,
+                a.publish_date = record.article.publish_date,
+                a.collect_date = record.article.collect_date,
+                a.title = record.article.title,
+                a.meta_site = record.article.meta_site,
+                a.description = record.article.description,
+                a.embedding = record.article.embedding
+
+            MERGE (t:TRIPLE {triple_id: record.triple.hash_id})
+            SET t.subject = record.triple.subject,
+                t.predicate = record.triple.predicate,
+                t.object = record.triple.object,
+                t.embedding = record.triple.embedding
+
+            MERGE (a)-[:MENTIONS]->(t)
+
+            FOREACH (subj IN record.subjects |
+                MERGE (s:ENTITY {entity_id: subj.hash_id})
+                SET s.entity_text = subj.entity_text,
+                    s.embedding = subj.embedding
+                MERGE (t)-[:HAS_SUBJECT]->(s)
+                MERGE (a)-[:CONTAINS_ENTITY]->(s)
+            )
+
+            FOREACH (obj IN record.objects |
+                MERGE (o:ENTITY {entity_id: obj.hash_id})
+                SET o.entity_text = obj.entity_text,
+                    o.embedding = obj.embedding
+                MERGE (t)-[:HAS_OBJECT]->(o)
+                MERGE (a)-[:CONTAINS_ENTITY]->(o)
+            )
+            """,
+            batch=with_triple
         )
-        """,
-        batch=batch_records
-    )
 
 
 # ============================================================
@@ -242,18 +254,10 @@ def prepare_graphdb_records(
         article_triples = triples_df[triples_df['article_uuid'] == article_uuid]
 
         if article_triples.empty:
-            # 트리플이 없어도 기사는 저장
+            # 트리플이 없으면 기사 노드만 별도 저장 (TRIPLE MERGE 스킵)
             records.append({
                 "article": article_info,
-                "triple": {
-                    "triple_id": "",
-                    "subject": "",
-                    "predicate": "",
-                    "object": "",
-                    "value": "",
-                    "type": "",
-                    "embedding": [],
-                },
+                "triple": None,
                 "subjects": [],
                 "objects": [],
             })
