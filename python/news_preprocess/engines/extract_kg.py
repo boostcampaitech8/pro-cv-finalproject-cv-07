@@ -97,6 +97,18 @@ Return JSON only."""
 # ============================================================
 # 헬퍼 함수
 # ============================================================
+def _normalize_entity(name: str) -> str:
+    """엔티티 이름 정규화: 소문자 변환, 's 제거, 공백 정리"""
+    name = name.strip().lower()
+    # possessive 's 제거 (e.g. "argentina's" -> "argentina")
+    name = re.sub(r"'s\b", "", name)
+    # 양쪽 따옴표/괄호 제거
+    name = name.strip("\"'""''()[]")
+    # 연속 공백 정리
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
 def _build_messages(title: str, description: str) -> list:
     """Chat 형식 메시지 생성"""
     user_content = USER_TEMPLATE.format(
@@ -329,7 +341,7 @@ def extract_kg_batch(
         # raw_results의 kg를 verified로 교체
         raw_results = [(idx, t, d, verified_map.get(idx, kg)) for idx, t, d, kg in raw_results]
 
-    # Step 3: 결과 수집
+    # Step 3: 결과 수집 (정규화 + 고아 엔티티 제거 + 중복 제거)
     entities_data = []
     triples_data = []
 
@@ -337,37 +349,57 @@ def extract_kg_batch(
         article_id = idx
         id_to_name = {}
 
+        # 노드 이름 정규화
         for node in kg.get("nodes", []):
             node_id = node.get("id")
             name = node.get("name")
             if node_id and name:
-                id_to_name[node_id] = name
-                entities_data.append({
-                    "article_id": article_id,
-                    "entity_value": name
-                })
+                normalized = _normalize_entity(name)
+                if normalized:
+                    id_to_name[node_id] = normalized
 
+        # 트리플 수집 & 사용된 엔티티 추적
+        used_entities = set()
         for rel in kg.get("relationships", []):
             src_id = rel.get("source_id")
             tgt_id = rel.get("target_id")
             rel_type = rel.get("type")
 
-            if src_id in id_to_name and tgt_id in id_to_name:
+            if src_id in id_to_name and tgt_id in id_to_name and rel_type:
+                subj = id_to_name[src_id]
+                obj = id_to_name[tgt_id]
                 triples_data.append({
                     "article_id": article_id,
-                    "subject": id_to_name[src_id],
-                    "predicate": rel_type,
-                    "object": id_to_name[tgt_id]
+                    "subject": subj,
+                    "predicate": rel_type.strip().lower(),
+                    "object": obj,
+                })
+                used_entities.add(subj)
+                used_entities.add(obj)
+
+        # 고아 엔티티 제거: relationship에 참여한 엔티티만 수집
+        seen = set()
+        for entity_name in used_entities:
+            if entity_name not in seen:
+                seen.add(entity_name)
+                entities_data.append({
+                    "article_id": article_id,
+                    "entity_value": entity_name,
                 })
 
     entities_df = pd.DataFrame(entities_data)
     triples_df = pd.DataFrame(triples_data)
 
-    # 빈 DataFrame인 경우 컬럼 추가
-    if entities_df.empty:
-        entities_df = pd.DataFrame(columns=['article_id', 'entity_value'])
-    if triples_df.empty:
-        triples_df = pd.DataFrame(columns=['article_id', 'subject', 'predicate', 'object'])
+    # 중복 제거
+    if not entities_df.empty:
+        entities_df = entities_df.drop_duplicates(subset=["article_id", "entity_value"])
+    else:
+        entities_df = pd.DataFrame(columns=["article_id", "entity_value"])
+
+    if not triples_df.empty:
+        triples_df = triples_df.drop_duplicates(subset=["article_id", "subject", "predicate", "object"])
+    else:
+        triples_df = pd.DataFrame(columns=["article_id", "subject", "predicate", "object"])
 
     print(f"  Extracted {len(entities_df)} entities, {len(triples_df)} triples")
 
