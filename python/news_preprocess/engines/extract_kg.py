@@ -7,6 +7,8 @@ Knowledge Graph 추출 모듈
 
 import os
 import time
+import random
+import threading
 import pandas as pd
 import json
 import re
@@ -27,6 +29,10 @@ _REPO_ROOT = _PYTHON_ROOT.parent
 load_dotenv(_REPO_ROOT / ".env")
 
 DEFAULT_NANO_MODEL = "openai:gpt-4.1-mini"
+DEFAULT_EXTRACT_FALLBACK_MODEL = "openai:gpt-4.1-nano"
+_RATE_LOCK = threading.Lock()
+_LAST_CALL = 0.0
+_MISTRAL_MIN_INTERVAL = float(os.environ.get("MISTRAL_MIN_INTERVAL", "0"))
 
 
 # ============================================================
@@ -133,6 +139,46 @@ def _build_verify_messages(title: str, description: str, nodes_json: str, rels_j
     ]
 
 
+def _rate_limit_wait():
+    """Simple global rate limiter across threads (best-effort)."""
+    global _LAST_CALL
+    if _MISTRAL_MIN_INTERVAL <= 0:
+        return
+    with _RATE_LOCK:
+        now = time.monotonic()
+        wait = _MISTRAL_MIN_INTERVAL - (now - _LAST_CALL)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_CALL = time.monotonic()
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    if "429" in str(err):
+        return True
+    status = getattr(err, "status_code", None)
+    if status == 429:
+        return True
+    resp = getattr(err, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 429:
+        return True
+    return False
+
+
+def _retry_delay(err: Exception, attempt: int) -> float:
+    """Compute backoff with jitter; respect Retry-After if present."""
+    resp = getattr(err, "response", None)
+    headers = getattr(resp, "headers", None) or {}
+    retry_after = headers.get("retry-after") or headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(float(retry_after), 0.0)
+        except Exception:
+            pass
+    base = 1.0
+    max_wait = 30.0
+    return min(max_wait, base * (2 ** attempt)) + random.uniform(0, 0.25)
+
+
 def _parse_kg_response(response: str) -> dict:
     """응답에서 JSON 파싱하여 nodes, relationships 추출"""
     # <think> 태그 제거
@@ -155,7 +201,13 @@ def _parse_kg_response(response: str) -> dict:
 # ============================================================
 # KG 추출 함수
 # ============================================================
-def extract_kg_single(title: str, description: str, model_name: str = None, client=None) -> dict:
+def extract_kg_single(
+    title: str,
+    description: str,
+    model_name: str = None,
+    client=None,
+    fallback_model: str = DEFAULT_EXTRACT_FALLBACK_MODEL,
+) -> dict:
     """
     단일 기사에서 KG 추출 (Mistral API)
 
@@ -166,8 +218,10 @@ def extract_kg_single(title: str, description: str, model_name: str = None, clie
         client = _get_client()
     messages = _build_messages(title, description)
 
+    last_error = None
     for attempt in range(5):
         try:
+            _rate_limit_wait()
             response = client.chat.completions.create(
                 model=model_name or DEFAULT_MODEL,
                 messages=messages,
@@ -177,11 +231,36 @@ def extract_kg_single(title: str, description: str, model_name: str = None, clie
             text = response.choices[0].message.content
             return _parse_kg_response(text)
         except Exception as e:
-            if '429' in str(e) and attempt < 4:
-                wait = 2 ** attempt
+            last_error = e
+            if _is_rate_limit_error(e) and attempt < 4:
+                wait = _retry_delay(e, attempt)
                 time.sleep(wait)
                 continue
-            raise
+            break
+
+    # Fallback path: run KG extraction with OpenAI after Mistral retries are exhausted.
+    try:
+        fallback_client = _openai_client()
+        response = fallback_client.responses.create(
+            model=_openai_model_id(fallback_model),
+            input=messages,
+            max_output_tokens=1024,
+            temperature=0.1,
+        )
+        text = getattr(response, "output_text", None)
+        if text is None:
+            try:
+                text = response.output[0].content[0].text
+            except Exception:
+                text = str(response)
+        return _parse_kg_response(text)
+    except Exception as fallback_error:
+        if last_error is not None:
+            raise RuntimeError(
+                f"Mistral KG extraction failed after retries ({last_error}); "
+                f"OpenAI fallback failed ({fallback_error})"
+            ) from fallback_error
+        raise
 
 def _openai_client():
     try:
