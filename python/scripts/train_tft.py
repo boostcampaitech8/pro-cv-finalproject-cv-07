@@ -36,6 +36,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.configs.train_config import TrainConfig
 from src.utils.set_seed import set_seed
 from src.data.dataset_tft import TFTDataLoader
+from src.data.bigquery_loader import load_price_table
 from src.models.TFT import TemporalFusionTransformer, QuantileLoss
 from src.engine.trainer_tft import train
 from src.utils.visualization import save_loss_curve
@@ -123,15 +124,28 @@ def main(config: TrainConfig):
         f"preprocessing/{config.target_commodity}_feature_engineering.csv"
     )
     news_path = os.path.join(config.data_dir, "news_features.csv")
-    split_path = os.path.join(config.data_dir, "rolling_fold.json")
+    price_source = price_path
+    if config.data_source == "bigquery":
+        price_source = load_price_table(
+            project_id=config.bq_project_id,
+            dataset_id=config.bq_dataset_id,
+            table=config.bq_train_table,
+            commodity=config.target_commodity,
+        )
+    split_file = config.split_file
+    if "{commodity}" in split_file:
+        split_file = split_file.format(commodity=config.target_commodity)
+    split_path = Path(split_file)
+    if not split_path.is_absolute():
+        split_path = Path(config.data_dir) / split_file
 
     # --------------------
     # Data loader
     # --------------------
     data_loader = TFTDataLoader(
-        price_data_path=price_path,
+        price_data_path=price_source,
         news_data_path=news_path,
-        split_file=split_path,
+        split_file=str(split_path),
         seq_length=config.seq_length,
         horizons=config.horizons,
         batch_size=config.batch_size,
@@ -149,17 +163,29 @@ def main(config: TrainConfig):
         # --------------------
         # Directories
         # --------------------
-        fold_dir = Path(config.checkpoint_dir) / f"TFT_{config.target_commodity}_fold{fold}_{h_tag}"
-        viz_dir = fold_dir / "visualizations"
-        interp_root = fold_dir / "interpretations" / f"fold{fold}"
-
+        if getattr(config, "checkpoint_layout", "legacy") == "simple":
+            fold_dir = Path(config.checkpoint_dir)
+            if len(config.fold) > 1:
+                fold_dir = fold_dir / f"fold_{fold}"
+        else:
+            fold_dir = Path(config.checkpoint_dir) / f"TFT_{config.target_commodity}_fold{fold}_{h_tag}"
         fold_dir.mkdir(parents=True, exist_ok=True)
-        viz_dir.mkdir(exist_ok=True)
-        interp_root.mkdir(parents=True, exist_ok=True)
 
-        pred_dir = fold_dir / "predictions"
-        pred_dir.mkdir(exist_ok=True)
+        viz_dir = None
+        if config.save_train_visualizations:
+            viz_dir = fold_dir / "visualizations"
+            viz_dir.mkdir(exist_ok=True)
+
+        interp_root = None
+        if config.compute_feature_importance or config.compute_temporal_importance:
+            interp_root = fold_dir / "interpretations" / f"fold{fold}"
+            interp_root.mkdir(parents=True, exist_ok=True)
+
+        pred_dir = None
         pred_rows = []
+        if config.save_val_predictions:
+            pred_dir = fold_dir / "predictions"
+            pred_dir.mkdir(exist_ok=True)
 
         # --------------------
         # Loaders  (★ 반드시 여기)
@@ -321,12 +347,13 @@ def main(config: TrainConfig):
         print(f"✓ Updated training summary: {summary_path}")
 
 
-        save_loss_curve(
-            train_hist,
-            valid_hist,
-            str(viz_dir),
-            "loss_curve.png",
-        )
+        if viz_dir is not None:
+            save_loss_curve(
+                train_hist,
+                valid_hist,
+                str(viz_dir),
+                "loss_curve.png",
+            )
 
         # ======================================================
         # Interpretation (NO MEAN POOLING)
@@ -479,7 +506,7 @@ def main(config: TrainConfig):
         print("✓ Interpretation saved (no mean pooling)")
 
         import pandas as pd
-        if len(pred_rows) > 0:
+        if pred_dir is not None and len(pred_rows) > 0:
             df_pred = pd.DataFrame(pred_rows)
             df_pred.to_csv(pred_dir / "val_predictions.csv", index=False)
             print(f"✓ Saved val predictions: {pred_dir / 'val_predictions.csv'}")

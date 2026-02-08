@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
 from src.interpretation.cnn_visualizer import GradCAM
 from src.models.CNN import CNN
+from src.utils.unified_output import build_anomaly_payload, map_severity_levels, write_json
 
 
 HORIZONS = [1, 5, 10, 20]
@@ -134,21 +135,7 @@ def _build_severity_levels_from_values(
     """
     Map values to severity levels using dataset thresholds.
     """
-    levels: Dict[str, str] = {}
-
-    for idx, horizon in enumerate(HORIZONS):
-        val = float(values[idx])
-        if val < float(q80[idx]):
-            level = "below_q80"
-        elif val < float(q90[idx]):
-            level = "q80_q90"
-        elif val < float(q95[idx]):
-            level = "q90_q95"
-        else:
-            level = "above_q95"
-        levels[f"h{horizon}"] = level
-
-    return levels
+    return map_severity_levels(values, q80, q90, q95, HORIZONS)
 
 
 def _build_severity_levels(
@@ -188,9 +175,13 @@ def run_inference_cnn(
     save_gradcam: bool = False,
     gradcam_stage: Optional[int] = None,
     gradcam_method: str = "gradcam",
+    save_legacy: bool = True,
+    save_unified: bool = True,
 ) -> Path:
     """
     Run inference on the validation split and save per-date JSON outputs.
+    Legacy outputs go to src/outputs/predictions/cnn, unified outputs to
+    src/outputs/predictions/unified/cnn.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -248,7 +239,18 @@ def run_inference_cnn(
         / f"fold_{fold}"
         / "results"
     )
-    results_root.mkdir(parents=True, exist_ok=True)
+    if save_legacy:
+        results_root.mkdir(parents=True, exist_ok=True)
+
+    unified_root = (
+        Path("src/outputs/predictions/unified/cnn")
+        / commodity
+        / exp_name
+        / f"fold_{fold}"
+        / "results"
+    )
+    if save_unified:
+        unified_root.mkdir(parents=True, exist_ok=True)
 
     q80 = np.asarray(dataset.q80, dtype=np.float32)
     q90 = np.asarray(dataset.q90, dtype=np.float32)
@@ -334,32 +336,57 @@ def run_inference_cnn(
             severity_level = _build_severity_levels(raw_returns, q80, q90, q95)
             severity_level_pred = _build_severity_levels_from_values(severity_scores, q80, q90, q95)
 
-            payload = {
-                "meta": {
-                    "date": date_str,
-                    "commodity": commodity,
-                    "window": window_size,
-                    "image_mode": image_mode,
-                    "aux_type": aux_type if use_aux else "none",
-                    "fusion": fusion,
-                    "backbone": backbone,
-                    "fold": fold,
-                },
-                "scores": {
-                    "severity": severity,
-                    "severity_level": severity_level,
-                    "severity_level_pred": severity_level_pred,
-                    "raw_returns": {
-                        "h1": float(raw_returns[0]),
-                        "h5": float(raw_returns[1]),
-                        "h10": float(raw_returns[2]),
-                        "h20": float(raw_returns[3]),
+            if save_legacy:
+                payload = {
+                    "meta": {
+                        "date": date_str,
+                        "commodity": commodity,
+                        "window": window_size,
+                        "image_mode": image_mode,
+                        "aux_type": aux_type if use_aux else "none",
+                        "fusion": fusion,
+                        "backbone": backbone,
+                        "fold": fold,
                     },
-                },
-            }
+                    "scores": {
+                        "severity": severity,
+                        "severity_level": severity_level,
+                        "severity_level_pred": severity_level_pred,
+                        "raw_returns": {
+                            "h1": float(raw_returns[0]),
+                            "h5": float(raw_returns[1]),
+                            "h10": float(raw_returns[2]),
+                            "h20": float(raw_returns[3]),
+                        },
+                    },
+                }
 
-            output_path = results_root / f"{date_str}.json"
-            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+                output_path = results_root / f"{date_str}.json"
+                output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+
+            if save_unified:
+                unified_payload = build_anomaly_payload(
+                    model="cnn",
+                    commodity=commodity,
+                    window=window_size,
+                    horizons=HORIZONS,
+                    as_of=date_str,
+                    fold=fold,
+                    scores=severity_scores,
+                    q80=q80,
+                    q90=q90,
+                    q95=q95,
+                    raw_returns=raw_returns,
+                    model_variant=exp_name,
+                    extra_meta={
+                        "image_mode": image_mode,
+                        "aux_type": aux_type if use_aux else "none",
+                        "fusion": fusion,
+                        "backbone": backbone,
+                    },
+                )
+                unified_path = unified_root / f"{date_str}.json"
+                write_json(unified_payload, unified_path)
 
         if gradcam is not None:
             for i, date_str in enumerate(dates):

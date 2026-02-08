@@ -170,7 +170,12 @@ def main(config: TrainConfig):
         
         price_path = os.path.join(config.data_dir, price_file)
         news_path = os.path.join(config.data_dir, news_file)
-        split_file = os.path.join(config.data_dir, "rolling_fold.json")
+        split_file = config.split_file
+        if "{commodity}" in split_file:
+            split_file = split_file.format(commodity=commodity)
+        split_path = Path(split_file)
+        if not split_path.is_absolute():
+            split_path = Path(config.data_dir) / split_file
         
         if not os.path.exists(price_path):
             print(f"{price_path} 파일 존재하지 않음")
@@ -179,7 +184,7 @@ def main(config: TrainConfig):
         data_loader = TFTDataLoader(
             price_data_path=price_path,
             news_data_path=news_path,
-            split_file=split_file,
+            split_file=str(split_path),
             seq_length=config.seq_length,
             horizons=config.horizons,
             batch_size=config.batch_size,
@@ -187,16 +192,16 @@ def main(config: TrainConfig):
         )
         
         data = pd.read_csv(price_path)
-        test_dates, test_loader = data_loader.get_test_loader(
-            fold,
-            scale_x=config.scale_x,
-            scale_y=config.scale_y
-        )
         
         all_preds = []
         all_trues = []
         
         for fold in config.fold:
+            test_dates, test_loader = data_loader.get_test_loader(
+                fold,
+                scale_x=config.scale_x,
+                scale_y=config.scale_y
+            )
             # ===== 폴더 구조 맞춤 =====
             h_tag = "h" + "-".join(map(str, config.horizons))
             fold_dir = Path(config.checkpoint_dir) / f"TFT_{commodity}_fold{fold}_{h_tag}"

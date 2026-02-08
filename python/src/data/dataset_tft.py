@@ -151,6 +151,10 @@ def align_news_to_trading_dates_runtime(
         final_news.append(row_data)
     
     final_news_df = pd.DataFrame(final_news)
+    if final_news_df.empty:
+        # No news matched to trading dates: create empty frame with expected columns
+        base_cols = ['date', 'news_count']
+        final_news_df = pd.DataFrame(columns=base_cols + news_emb_cols)
     
     # 모든 거래일에 대해 뉴스 데이터 생성
     all_trading_dates_df = pd.DataFrame({'date': [pd.Timestamp(d) for d in trading_dates]})
@@ -173,8 +177,8 @@ def align_news_to_trading_dates_runtime(
 
 
 def load_data_with_news(
-    price_data_path: str,
-    news_data_path: str
+    price_data_path: "str | pd.DataFrame",
+    news_data_path: "str | pd.DataFrame"
 ) -> pd.DataFrame:
     """
     가격 데이터와 뉴스 데이터를 로드해서 병합
@@ -188,12 +192,18 @@ def load_data_with_news(
         병합된 DataFrame
     """
     # 가격 데이터 로드
-    price_df = pd.read_csv(price_data_path)
+    if isinstance(price_data_path, pd.DataFrame):
+        price_df = price_data_path.copy()
+    else:
+        price_df = pd.read_csv(price_data_path)
     print(f"✓ Price data loaded: {len(price_df)} rows, {len(price_df.columns)} columns")
     
     # 뉴스 데이터 로드
     try:
-        news_df = pd.read_csv(news_data_path)
+        if isinstance(news_data_path, pd.DataFrame):
+            news_df = news_data_path.copy()
+        else:
+            news_df = pd.read_csv(news_data_path)
         print(f"✓ News data loaded: {len(news_df)} rows, {len(news_df.columns)} columns")
         
         # 거래일에 맞춰 뉴스 정렬
@@ -233,8 +243,16 @@ def build_tft_dataset(
     time_series: pd.DataFrame,
     seq_length: int,
     horizons: List[int],
-    feature_columns: Optional[List[str]] = None
+    feature_columns: Optional[List[str]] = None,
+    require_targets: bool = True
 ):
+    # Ensure numeric dtypes for feature/target columns
+    time_series = time_series.copy()
+    for col in time_series.columns:
+        if col in ("time", "date"):
+            continue
+        time_series[col] = pd.to_numeric(time_series[col], errors="coerce")
+
     if feature_columns is None:
         exclude_cols = ['time', 'date']
         exclude_cols += [c for c in time_series.columns if c.startswith('log_return_')]
@@ -243,43 +261,62 @@ def build_tft_dataset(
             if c not in exclude_cols and
             np.issubdtype(time_series[c].dtype, np.number)
         ]
+        if require_targets:
+            numeric_cols = [c for c in numeric_cols if time_series[c].notna().any()]
 
         news_emb_cols = sorted([c for c in numeric_cols if c.startswith('news_emb_')])
         other_numeric_cols = [c for c in numeric_cols if not c.startswith('news_emb_')]
 
         feature_columns = other_numeric_cols + news_emb_cols
 
+    if not feature_columns:
+        raise ValueError("No numeric features found after preprocessing. Check input CSV dtypes.")
+
 
     dataX, dataY, dataT = [], [], []
-    max_h = max(horizons)
+    max_h = max(horizons) if require_targets else 0
+    if require_targets:
+        end_idx = len(time_series) - seq_length - max_h
+    else:
+        end_idx = len(time_series) - seq_length
 
-    for i in range(len(time_series) - seq_length - max_h):
+    for i in range(max(0, end_idx)):
+        # 입력: t-seq_length ~ t-1 (target_base = i+seq_length)
         x = time_series.iloc[i:i+seq_length][feature_columns].values
 
         if not np.isfinite(x).all():
-            continue
+            if require_targets:
+                continue
+            # Inference: keep feature shape consistent, replace NaNs with 0
+            x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
-        target_base = i + seq_length - 1
+        target_base = i + seq_length
 
         y = []
         valid = True
 
-        for h in horizons:
-            col = f'log_return_{h}'
-            val = time_series.loc[target_base, col]
+        if require_targets:
+            for h in horizons:
+                col = f'log_return_{h}'
+                if col not in time_series.columns:
+                    valid = False
+                    break
+                val = time_series.loc[target_base, col]
 
-            if (
-                pd.isna(val)
-                or np.isinf(val)
-                or abs(val) > 1.0      # log_return ±100% 컷
-            ):
-                valid = False
-                break
+                if (
+                    pd.isna(val)
+                    or np.isinf(val)
+                    or abs(val) > 1.0      # log_return ±100% 컷
+                ):
+                    valid = False
+                    break
 
-            y.append(val)
+                y.append(val)
 
-        if not valid:
-            continue
+            if not valid:
+                continue
+        else:
+            y = [0.0 for _ in horizons]
 
         t = time_series.loc[target_base, 'time']
 
@@ -358,7 +395,8 @@ class TFTDataLoader:
         horizons: List[int],
         batch_size: int,
         num_workers: int = 4,
-        feature_columns: Optional[List[str]] = None
+        feature_columns: Optional[List[str]] = None,
+        require_targets: bool = True
     ):
         self.price_data_path = price_data_path
         self.news_data_path = news_data_path
@@ -368,6 +406,7 @@ class TFTDataLoader:
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.feature_columns = feature_columns
+        self.require_targets = require_targets
         
         # 데이터 로드 (런타임에 정렬)
         self.data = load_data_with_news(price_data_path, news_data_path)
@@ -377,7 +416,8 @@ class TFTDataLoader:
             self.data,
             seq_length,
             horizons,
-            feature_columns
+            feature_columns,
+            require_targets=require_targets
         )
 
         self.fold_scalers = {}
@@ -498,3 +538,33 @@ class TFTDataLoader:
         )
         
         return test_dates, test_loader
+
+    def get_inference_loader(
+        self,
+        scale_x: bool = True,
+        scale_y: bool = True
+    ) -> Tuple[List[str], torch.utils.data.DataLoader]:
+        """Inference DataLoader (no split)"""
+        X, Y = self.X, self.Y
+        if scale_x and self.fold_scalers:
+            scaler = next(iter(self.fold_scalers.values()))
+            if scaler.get("scale_x", False):
+                X = _transform_x(X, scaler["x_mean"], scaler["x_std"])
+        if scale_y and self.fold_scalers:
+            scaler = next(iter(self.fold_scalers.values()))
+            if scaler.get("scale_y", False):
+                Y = _transform_y(Y, scaler["y_mean"], scaler["y_std"])
+
+        dates = [str(t)[:10] for t in self.T]
+        dataset = torch.utils.data.TensorDataset(
+            torch.FloatTensor(X),
+            torch.FloatTensor(Y)
+        )
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True
+        )
+        return dates, loader

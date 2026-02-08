@@ -9,5 +9,7 @@ python/--*
 
 # accidental experiment directories
 scripts/
+!python/scripts/
+!python/scripts/*
 
 __pycache__/
