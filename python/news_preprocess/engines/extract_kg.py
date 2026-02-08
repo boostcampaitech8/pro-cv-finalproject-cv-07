@@ -307,7 +307,7 @@ def extract_kg_batch(
             print(f"    Error on row {i}: {e}")
             return None
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {
             executor.submit(_extract_one, (i, row)): i
             for i, row in df.iterrows()

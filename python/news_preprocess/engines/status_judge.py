@@ -182,7 +182,7 @@ def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
             print(f"  Error on row {idx}: {e}")
             return idx, 'F'
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {
             executor.submit(_judge_one, (i, row)): i
             for i, row in df.iterrows()
