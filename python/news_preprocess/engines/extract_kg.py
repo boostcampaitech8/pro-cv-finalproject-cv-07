@@ -154,15 +154,22 @@ def extract_kg_single(title: str, description: str, model_name: str = None, clie
         client = _get_client()
     messages = _build_messages(title, description)
 
-    response = client.chat.completions.create(
-        model=model_name or DEFAULT_MODEL,
-        messages=messages,
-        max_tokens=1024,
-        temperature=0.1,
-    )
-
-    text = response.choices[0].message.content
-    return _parse_kg_response(text)
+    for attempt in range(5):
+        try:
+            response = client.chat.completions.create(
+                model=model_name or DEFAULT_MODEL,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.1,
+            )
+            text = response.choices[0].message.content
+            return _parse_kg_response(text)
+        except Exception as e:
+            if '429' in str(e) and attempt < 4:
+                wait = 2 ** attempt
+                time.sleep(wait)
+                continue
+            raise
 
 def _openai_client():
     try:
@@ -288,7 +295,7 @@ def extract_kg_batch(
             print(f"    Error on row {i}: {e}")
             return None
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
             executor.submit(_extract_one, (i, row)): i
             for i, row in df.iterrows()

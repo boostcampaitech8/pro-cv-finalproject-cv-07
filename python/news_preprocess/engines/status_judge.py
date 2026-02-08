@@ -5,6 +5,7 @@
 """
 
 import os
+import time
 import pandas as pd
 import re
 from pathlib import Path
@@ -127,15 +128,22 @@ def judge_single(title: str, description: str, key_word: str,
         client = _get_client()
     messages = _build_messages(title, description, key_word)
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        max_tokens=20,
-        temperature=0.1,
-    )
-
-    text = response.choices[0].message.content
-    return _parse_response(text)
+    for attempt in range(5):
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=20,
+                temperature=0.1,
+            )
+            text = response.choices[0].message.content
+            return _parse_response(text)
+        except Exception as e:
+            if '429' in str(e) and attempt < 4:
+                wait = 2 ** attempt
+                time.sleep(wait)
+                continue
+            raise
 
 
 def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
@@ -154,7 +162,7 @@ def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
     Returns:
         T/F 결과 리스트
     """
-    print(f"Judging {len(df)} articles (4 workers)...")
+    print(f"Judging {len(df)} articles (2 workers)...")
 
     client = _get_client()
     predictions = ['F'] * len(df)
@@ -174,7 +182,7 @@ def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
             print(f"  Error on row {idx}: {e}")
             return idx, 'F'
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         futures = {
             executor.submit(_judge_one, (i, row)): i
             for i, row in df.iterrows()
