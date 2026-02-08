@@ -22,8 +22,9 @@ def push_data(db_client, collection_name, df, batch_size=1000):
                 id=row['id'],
                 vector=row['article_embedding'],
                 payload={'date': row['trade_date'].strftime('%Y-%m-%d'),
+                         'type': row['type'],
                          'title': row['title'],
-                         'description': row['description']}
+                         'description': row['description']},
                 )
             )
 
