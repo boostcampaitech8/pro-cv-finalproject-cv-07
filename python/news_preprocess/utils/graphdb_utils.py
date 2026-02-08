@@ -111,7 +111,7 @@ def _create_nodes_and_relationships_batch(tx, batch_records):
             a.embedding = record.article.embedding
 
         // TRIPLE 노드
-        MERGE (t:TRIPLE {triple_id: record.triple.triple_id})
+        MERGE (t:TRIPLE {triple_id: record.triple.hash_id})
         SET t.subject = record.triple.subject,
             t.predicate = record.triple.predicate,
             t.object = record.triple.object,
@@ -122,7 +122,7 @@ def _create_nodes_and_relationships_batch(tx, batch_records):
 
         // SUBJECT ENTITY 노드 및 관계
         FOREACH (subj IN record.subjects |
-            MERGE (s:ENTITY {entity_id: subj.entity_id})
+            MERGE (s:ENTITY {entity_id: subj.hash_id})
             SET s.entity_text = subj.entity_text,
                 s.embedding = subj.embedding
             MERGE (t)-[:HAS_SUBJECT]->(s)
@@ -131,7 +131,7 @@ def _create_nodes_and_relationships_batch(tx, batch_records):
 
         // OBJECT ENTITY 노드 및 관계
         FOREACH (obj IN record.objects |
-            MERGE (o:ENTITY {entity_id: obj.entity_id})
+            MERGE (o:ENTITY {entity_id: obj.hash_id})
             SET o.entity_text = obj.entity_text,
                 o.embedding = obj.embedding
             MERGE (t)-[:HAS_OBJECT]->(o)
@@ -182,6 +182,7 @@ def _match_entities_to_triple(
             if entity_value in subject or subject in entity_value:
                 subject_entities.append({
                     "entity_id": ent_row.get('entity_uuid', ''),
+                    "hash_id": ent_row.get('hash_id', ''),
                     "value": entity_value,
                     "type": article_type,
                     "embedding": _safe_embedding(ent_row.get('embedding', [])),
@@ -192,6 +193,7 @@ def _match_entities_to_triple(
             if entity_value in obj or obj in entity_value:
                 object_entities.append({
                     "entity_id": ent_row.get('entity_uuid', ''),
+                    "hash_id": ent_row.get('hash_id', ''),
                     "value": entity_value,
                     "type": article_type,
                     "embedding": _safe_embedding(ent_row.get('embedding', [])),
@@ -265,6 +267,7 @@ def prepare_graphdb_records(
 
             triple_info = {
                 "triple_id": triple_row.get('triple_uuid', ''),
+                "hash_id": triple_row.get('hash_id', ''),
                 "subject": subject,
                 "predicate": predicate,
                 "object": obj,
