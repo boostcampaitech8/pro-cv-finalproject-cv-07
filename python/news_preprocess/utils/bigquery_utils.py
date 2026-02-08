@@ -56,7 +56,7 @@ def save_articles(df: pd.DataFrame, table_name: str = TABLE_ARTICLES) -> int:
     # 저장할 컬럼
     save_columns = [
         'id', 'title', 'doc_url', 'description', 'all_text',
-        'publish_date', 'meta_site_name', 'key_word', 'embedding', 'collect_date'
+        'publish_date', 'meta_site_name', 'key_word','collect_date'
     ]
 
     existing_columns = [col for col in save_columns if col in df.columns]
@@ -165,6 +165,7 @@ def save_triples(triples_df: pd.DataFrame, table_name: str = TABLE_TRIPLES) -> i
 
 def save_daily_summary(collect_date, collect_date_count: int, news_embedding_mean: list,
                        news_features: Optional[dict] = None,
+                       key_word: Optional[str] = None,
                        table_name: str = TABLE_DAILY_SUMMARY) -> int:
     """
     일별 요약 데이터를 BigQuery에 저장
@@ -177,6 +178,7 @@ def save_daily_summary(collect_date, collect_date_count: int, news_embedding_mea
             score 통계: sentiment_score_mean/std/max/min, timeframe_score_mean/std/max/min
             sentiment 비율: sentiment_neg_ratio, sentiment_neu_ratio, sentiment_pos_ratio
             timeframe 비율: time_past_ratio, time_present_ratio, time_future_ratio
+        key_word: 요약 카테고리 (metal/agriculture)
         table_name: 테이블명
 
     Returns:
@@ -191,6 +193,8 @@ def save_daily_summary(collect_date, collect_date_count: int, news_embedding_mea
         'news_embedding_mean': news_embedding_mean,
         'created_at': datetime.now(timezone.utc),
     }
+    if key_word is not None:
+        row['key_word'] = str(key_word)
     if news_features is not None:
         row.update(news_features)
 
@@ -199,6 +203,7 @@ def save_daily_summary(collect_date, collect_date_count: int, news_embedding_mea
     job_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_APPEND",
         autodetect=True,
+        schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field="collect_date"
