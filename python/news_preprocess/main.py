@@ -116,14 +116,12 @@ def save_to_vectordb(df: pd.DataFrame):
         pass  # Collection already exists
 
     # push_data에 맞게 DataFrame 컬럼 매핑
-    df_for_db = df[['id', 'embedding', 'collect_date', 'title', 'description', 'key_word']].copy()
+    df_for_db = df[['id', 'embedding', 'collect_date', 'title', 'description', 'key_word', 'publish_date', 'meta_site_name', 'doc_url']].copy()
     df_for_db = df_for_db.rename(columns={
-        'embedding': 'article_embedding',
-        'collect_date': 'trade_date',
         'key_word': 'type',
+        'meta_site_name': 'meta_site',
+        'doc_url': 'url',
     })
-    # trade_date가 datetime 객체여야 함 (push_data에서 strftime 호출)
-    df_for_db['trade_date'] = pd.to_datetime(df_for_db['trade_date'])
 
     # 저장
     push_data(client, "news", df_for_db)

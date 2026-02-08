@@ -20,11 +20,14 @@ def push_data(db_client, collection_name, df, batch_size=1000):
         points_batch.append(
             PointStruct(
                 id=row['id'],
-                vector=row['article_embedding'],
-                payload={'date': row['trade_date'].strftime('%Y-%m-%d'),
-                         'type': row['type'],
+                vector=row['embedding'],
+                payload={'collect_date': row['collect_date'],
                          'title': row['title'],
-                         'description': row['description']},
+                         'description': row['description'],
+                         'type': row['type'],
+                         'publish_date': row['publish_date'],
+                         'meta_site': row['meta_site'],
+                         'url': row['url']},
                 )
             )
 
