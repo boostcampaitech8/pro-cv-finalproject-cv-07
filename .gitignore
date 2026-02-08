@@ -17,3 +17,11 @@ python/scripts/lightning_logs/
 python/scripts/lightning_logs/**
 
 __pycache__/
+
+# Airflow local artifacts / secrets
+airflow/.env
+airflow/airflow.cfg
+airflow/airflow.db
+airflow/logs/
+airflow/logs/**
+airflow/*.json
