@@ -1,0 +1,35 @@
+# ===== Data Processing =====
+pandas
+numpy
+
+# ===== ML / LLM =====
+# torch
+transformers
+openai
+
+# ===== Web Scraping =====
+gnews
+googlenewsdecoder
+trafilatura
+beautifulsoup4
+
+# ===== Embedding (AWS Bedrock) =====
+boto3
+
+# ===== Vector DB (Qdrant) =====
+qdrant-client
+
+# ===== Graph DB (Neo4j) =====
+neo4j
+neo4j-graphrag
+
+# ===== Cloud Storage (BigQuery) =====
+google-cloud-bigquery
+google-auth
+
+# ===== Market Calendar =====
+pandas-market-calendars
+
+# ===== Utilities =====
+python-dotenv
+tqdm
