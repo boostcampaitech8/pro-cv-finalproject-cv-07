@@ -42,7 +42,7 @@ USER_TEMPLATE = """Title: {title}
 Description: {description}
 Keyword: {key_word}
 
-Is this article relevant to agricultural commodities market news? Answer T or F only."""
+Is this article relevant to commodities market news (agriculture or metals)? Answer T or F only."""
 
 
 # ============================================================
