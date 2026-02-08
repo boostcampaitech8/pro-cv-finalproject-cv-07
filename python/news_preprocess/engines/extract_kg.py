@@ -8,23 +8,21 @@ Knowledge Graph 추출 모듈
 import os
 import time
 import pandas as pd
-import torch
 import json
 import re
 from pathlib import Path
 from typing import Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
-# status_judge.py의 모델 로딩 함수 재사용
 import sys
 _NEWS_PREPROCESS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_NEWS_PREPROCESS_ROOT))
-from engines.status_judge import load_model, DEFAULT_MODEL
+from engines.status_judge import _get_client, DEFAULT_MODEL
 
 from dotenv import load_dotenv
 
-# .env 로드
-_PYTHON_ROOT = _NEWS_PREPROCESS_ROOT.parent  # python/
+_PYTHON_ROOT = _NEWS_PREPROCESS_ROOT.parent
 _REPO_ROOT = _PYTHON_ROOT.parent
 load_dotenv(_REPO_ROOT / ".env")
 
@@ -145,37 +143,26 @@ def _parse_kg_response(response: str) -> dict:
 # ============================================================
 # KG 추출 함수
 # ============================================================
-def extract_kg_single(title: str, description: str, model_name: str = None) -> dict:
+def extract_kg_single(title: str, description: str, model_name: str = None, client=None) -> dict:
     """
-    단일 기사에서 KG 추출
+    단일 기사에서 KG 추출 (Mistral API)
 
     Returns:
         {"nodes": [...], "relationships": [...]}
     """
-    model, tokenizer = load_model(model_name or DEFAULT_MODEL)
+    if client is None:
+        client = _get_client()
     messages = _build_messages(title, description)
 
-    if hasattr(tokenizer, 'apply_chat_template'):
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        text = f"System: {SYSTEM_PROMPT}\n\nUser: {messages[1]['content']}\n\nAssistant:"
+    response = client.chat.completions.create(
+        model=model_name or DEFAULT_MODEL,
+        messages=messages,
+        max_tokens=1024,
+        temperature=0.1,
+    )
 
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=1024,
-            do_sample=True,
-            temperature=0.1,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    new_tokens = outputs[0][inputs['input_ids'].shape[1]:]
-    response = tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-    return _parse_kg_response(response)
+    text = response.choices[0].message.content
+    return _parse_kg_response(text)
 
 def _openai_client():
     try:
@@ -282,32 +269,44 @@ def extract_kg_batch(
     print(f"\n[Knowledge Graph Extraction]")
     print(f"  Processing {len(df)} articles...")
 
-    # Step 1: 로컬 LLM으로 KG 추출 (순차 - GPU 사용)
+    mistral_client = _get_client()
+
+    # Step 1: Mistral API로 KG 추출 (병렬 4개)
     raw_results = []  # list of (index, title, description, kg)
-    for i, row in df.iterrows():
+
+    def _extract_one(item):
+        i, row = item
         try:
             kg = extract_kg_single(
                 row.get(title_col, ""),
                 row.get(desc_col, ""),
-                model_name
+                model_name,
+                client=mistral_client,
             )
-            raw_results.append((i, row.get(title_col, ""), row.get(desc_col, ""), kg))
+            return (i, row.get(title_col, ""), row.get(desc_col, ""), kg)
         except Exception as e:
             print(f"    Error on row {i}: {e}")
-            continue
+            return None
 
-        if (len(raw_results)) % 10 == 0:
-            print(f"    Extracted {len(raw_results)}/{len(df)}")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(_extract_one, (i, row)): i
+            for i, row in df.iterrows()
+        }
+        for future in tqdm(as_completed(futures), total=len(df), desc="KG Extraction"):
+            result = future.result()
+            if result is not None:
+                raw_results.append(result)
 
     # Step 2: OpenAI API로 predicate 검증 (병렬 4개)
     if verify_predicate_only and raw_results:
         print(f"  Verifying predicates ({len(raw_results)} articles, 4 workers)...")
-        client = _openai_client()
+        openai_client = _openai_client()
 
         def _verify_one(item):
             idx, title, desc, kg = item
             try:
-                verified = verify_predicates(title, desc, kg, client=client)
+                verified = verify_predicates(title, desc, kg, client=openai_client)
                 return (idx, verified)
             except Exception as e:
                 print(f"    Verify error on row {idx}: {e}")
@@ -316,11 +315,9 @@ def extract_kg_batch(
         verified_map = {}
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {executor.submit(_verify_one, item): item[0] for item in raw_results}
-            for future in as_completed(futures):
+            for future in tqdm(as_completed(futures), total=len(raw_results), desc="Predicate Verify"):
                 idx, verified_kg = future.result()
                 verified_map[idx] = verified_kg
-                if len(verified_map) % 10 == 0:
-                    print(f"    Verified {len(verified_map)}/{len(raw_results)}")
 
         # raw_results의 kg를 verified로 교체
         raw_results = [(idx, t, d, verified_map.get(idx, kg)) for idx, t, d, kg in raw_results]
@@ -374,9 +371,6 @@ def extract_kg_batch(
 # 메인 (테스트용)
 # ============================================================
 if __name__ == "__main__":
-    from status_judge import unload_model
-
-    # 테스트
     test_title = "Soybean prices surge as drought hits Argentina"
     test_desc = "Argentine farmers face significant crop losses due to prolonged dry conditions. USDA reports lower production estimates."
 
@@ -385,5 +379,3 @@ if __name__ == "__main__":
     kg = verify_predicates(test_title, test_desc, kg)
     print(f"Nodes: {kg.get('nodes', [])}")
     print(f"Relationships: {kg.get('relationships', [])}")
-
-    unload_model()

@@ -1,31 +1,18 @@
 #!/usr/bin/env python3
 """
 뉴스 T/F 판단 모듈
-- LLM을 사용하여 뉴스가 상품 선물 가격 예측에 관련있는지 판단
-- model_benchmark_transformers.py 기반
+- Mistral API를 사용하여 뉴스가 상품 선물 가격 예측에 관련있는지 판단
 """
 
 import os
 import pandas as pd
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import re
-import gc
 from pathlib import Path
-
-
-# ============================================================
-# 설정
-# ============================================================
-MODEL_CACHE_DIR = Path("/data/ephemeral/home/tena/model_cache")
-
-# HuggingFace 캐시 디렉토리 설정
-os.environ["HF_HOME"] = str(MODEL_CACHE_DIR)
-os.environ["TRANSFORMERS_CACHE"] = str(MODEL_CACHE_DIR / "transformers")
-os.environ["HF_HUB_CACHE"] = str(MODEL_CACHE_DIR / "hub")
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
 
 # 기본 모델
-DEFAULT_MODEL = "mistralai/Mistral-Nemo-Instruct-2407"
+DEFAULT_MODEL = "open-mistral-nemo-2407"
 
 # 프롬프트 템플릿
 SYSTEM_PROMPT = """You are a Commodities Trader looking for market signals.
@@ -58,67 +45,33 @@ Is this article relevant to agricultural commodities market news? Answer T or F 
 
 
 # ============================================================
-# 모델 관리 (싱글톤)
+# Mistral API 클라이언트
 # ============================================================
-_model = None
-_tokenizer = None
-_current_model_name = None
+_client = None
+
+
+def _get_client():
+    """Mistral API 클라이언트 (OpenAI SDK 호환, 싱글톤)"""
+    global _client
+    if _client is None:
+        from openai import OpenAI
+        api_key = os.environ.get("MISTRAL_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("MISTRAL_API_KEY not set. Put it in .env or environment.")
+        _client = OpenAI(api_key=api_key, base_url="https://api.mistral.ai/v1")
+    return _client
 
 
 def load_model(model_name: str = DEFAULT_MODEL):
-    """모델 로드 (싱글톤 패턴)"""
-    global _model, _tokenizer, _current_model_name
-
-    if _model is not None and _current_model_name == model_name:
-        return _model, _tokenizer
-
-    # 기존 모델 정리
-    if _model is not None:
-        del _model, _tokenizer
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    print(f"Loading model: {model_name}...")
-    MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    _tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        cache_dir=str(MODEL_CACHE_DIR / "hub"),
-    )
-
-    if _tokenizer.pad_token is None:
-        _tokenizer.pad_token = _tokenizer.eos_token
-
-    _model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-        cache_dir=str(MODEL_CACHE_DIR / "hub"),
-    )
-    _model.eval()
-    _current_model_name = model_name
-
-    print(f"Model loaded: {model_name}")
-    return _model, _tokenizer
+    """호환성 유지용 (API 모드에서는 클라이언트 반환)"""
+    return _get_client(), None
 
 
 def unload_model():
-    """모델 메모리 해제"""
-    global _model, _tokenizer, _current_model_name
-
-    # 변수가 정의되지 않았거나 None인 경우 처리
-    if '_model' not in globals() or _model is None:
-        return
-
-    del _model, _tokenizer
-    _model = None
-    _tokenizer = None
-    _current_model_name = None
-    gc.collect()
-    torch.cuda.empty_cache()
-    print("Model unloaded")
+    """클라이언트 해제"""
+    global _client
+    _client = None
+    print("Mistral API client released")
 
 
 # ============================================================
@@ -155,48 +108,41 @@ def _parse_response(response: str) -> str:
     return 'F'
 
 
-def judge_single(title: str, description: str, key_word: str, model_name: str = DEFAULT_MODEL) -> str:
+def judge_single(title: str, description: str, key_word: str,
+                  model_name: str = DEFAULT_MODEL, client=None) -> str:
     """
-    단일 기사 T/F 판단
+    단일 기사 T/F 판단 (Mistral API)
 
     Args:
         title: 기사 제목
         description: 기사 설명
         key_word: 검색 키워드
+        model_name: Mistral 모델명
+        client: OpenAI 호환 클라이언트 (None이면 싱글톤 사용)
 
     Returns:
         'T' (관련 있음) 또는 'F' (관련 없음)
     """
-    model, tokenizer = load_model(model_name)
+    if client is None:
+        client = _get_client()
     messages = _build_messages(title, description, key_word)
 
-    if hasattr(tokenizer, 'apply_chat_template'):
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    else:
-        text = f"System: {SYSTEM_PROMPT}\n\nUser: {messages[1]['content']}\n\nAssistant:"
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_tokens=20,
+        temperature=0.1,
+    )
 
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=20,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    new_tokens = outputs[0][inputs['input_ids'].shape[1]:]
-    response = tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-    return _parse_response(response)
+    text = response.choices[0].message.content
+    return _parse_response(text)
 
 
 def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
                 title_col: str = "title", desc_col: str = "description",
                 keyword_col: str = "key_word") -> list[str]:
     """
-    배치 T/F 판단
+    배치 T/F 판단 (병렬 4 workers)
 
     Args:
         df: DataFrame (title, description, key_word 컬럼 필요)
@@ -208,25 +154,34 @@ def judge_batch(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
     Returns:
         T/F 결과 리스트
     """
-    predictions = []
+    print(f"Judging {len(df)} articles (4 workers)...")
 
-    print(f"Judging {len(df)} articles...")
+    client = _get_client()
+    predictions = ['F'] * len(df)
 
-    for i, row in df.iterrows():
+    def _judge_one(idx_row):
+        idx, row = idx_row
         try:
             pred = judge_single(
                 row[title_col],
                 row.get(desc_col, ""),
                 row.get(keyword_col, ""),
-                model_name
+                model_name,
+                client=client,
             )
-            predictions.append(pred)
+            return idx, pred
         except Exception as e:
-            print(f"  Error on row {i}: {e}")
-            predictions.append('F')
+            print(f"  Error on row {idx}: {e}")
+            return idx, 'F'
 
-        if (i + 1) % 20 == 0:
-            print(f"  Processed {i + 1}/{len(df)}")
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(_judge_one, (i, row)): i
+            for i, row in df.iterrows()
+        }
+        for future in tqdm(as_completed(futures), total=len(df), desc="T/F Classification"):
+            idx, pred = future.result()
+            predictions[idx] = pred
 
     return predictions
 
@@ -255,7 +210,12 @@ def filter_relevant(df: pd.DataFrame, model_name: str = DEFAULT_MODEL,
 
 
 if __name__ == "__main__":
-    # 테스트
+    import sys
+    _NEWS_PREPROCESS_ROOT = Path(__file__).resolve().parent.parent
+    _REPO_ROOT = _NEWS_PREPROCESS_ROOT.parent.parent
+    from dotenv import load_dotenv
+    load_dotenv(_REPO_ROOT / ".env")
+
     test_title = "Soybean prices surge as drought hits Argentina"
     test_desc = "Argentine farmers face significant crop losses due to prolonged dry conditions"
     test_keyword = "soybean"
