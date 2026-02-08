@@ -67,10 +67,12 @@ def _build_exp_name(cfg: CNNBatchConfig, window_size: int, fold: int) -> str:
 def main(cfg: CNNBatchConfig) -> None:
     set_seed(cfg.seed)
 
-    data_dir = Path(cfg.data_dir)
+    data_dir = Path(cfg.data_dir).resolve()
     split_path = Path(cfg.split_file)
     if not split_path.is_absolute():
-        split_path = data_dir / split_path
+        split_path = (data_dir / split_path).resolve()
+    else:
+        split_path = split_path.resolve()
 
     date_tag = cfg.date_tag or _infer_date_tag(split_path)
     checkpoint_root = _format_root(cfg.checkpoint_root, cfg.target_commodity, date_tag, cfg.output_tag)
@@ -157,7 +159,7 @@ def main(cfg: CNNBatchConfig) -> None:
             ckpt_dir = checkpoint_root / f"w{window_size}"
             checkpoint_path = ckpt_dir / "best_model.pt"
             metrics_path = ckpt_dir / "val_metrics.json"
-            log_path = ckpt_dir / "train_log.jsonl"
+            log_path = ckpt_dir / "train_log.jsonl" if cfg.save_train_log else None
 
             train_cnn(
                 model=model,

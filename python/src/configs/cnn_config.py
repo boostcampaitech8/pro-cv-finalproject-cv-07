@@ -29,10 +29,11 @@ class CNNBatchConfig:
     epochs: int = 300
     early_stop_patience: int = 30
     early_stop_metric: str = "auprc"
-    min_epochs: int = 50
+    min_epochs: int = 30
     freeze_backbone_epochs: int = 20
     severity_loss_weight: float = 1.0
     horizon_weights: List[float] = field(default_factory=lambda: [1.0] * 20)
+    save_train_log: bool = False
 
     # ===== Outputs =====
     output_tag: str = "eval"

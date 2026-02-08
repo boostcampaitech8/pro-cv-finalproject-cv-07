@@ -249,8 +249,12 @@ def run_inference_cnn(
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     split_path = Path(split_file) if split_file else None
-    if split_path is not None and not split_path.is_absolute() and data_dir:
-        split_path = Path(data_dir) / split_path
+    data_root = Path(data_dir).resolve() if data_dir else None
+    if split_path is not None:
+        if not split_path.is_absolute() and data_root is not None:
+            split_path = (data_root / split_path).resolve()
+        else:
+            split_path = split_path.resolve()
 
     dataset = CNNDataset(
         commodity=commodity,
@@ -260,7 +264,7 @@ def run_inference_cnn(
         image_mode=image_mode,
         use_aux=use_aux,
         aux_type=aux_type,
-        data_dir=data_dir,
+        data_dir=str(data_root) if data_root else None,
         split_file=str(split_path) if split_path else None,
     )
 
@@ -277,13 +281,14 @@ def run_inference_cnn(
     if use_aux:
         aux_dim += dataset.news_dim
 
+    num_outputs = len(HORIZONS)
     model = CNN(
         backbone=backbone,
         in_chans=in_chans,
         aux_dim=aux_dim,
         fusion=fusion,
         dropout=0.1,
-        num_outputs=4,
+        num_outputs=num_outputs,
         pretrained=False,
     )
 

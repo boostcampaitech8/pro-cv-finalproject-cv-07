@@ -100,6 +100,12 @@ def compute_metrics_per_horizon(
 
 
 def summarize_metrics(metrics: Dict[str, Dict[str, float]]) -> Dict[str, float]:
+    def _nanmean_safe(values: list[float]) -> float:
+        finite_vals = [v for v in values if np.isfinite(v)]
+        if not finite_vals:
+            return float("nan")
+        return float(np.mean(finite_vals))
+
     auroc_vals = [metrics[str(h)]["auroc"] for h in HORIZONS]
     auprc_vals = [metrics[str(h)]["auprc"] for h in HORIZONS]
     f1_vals = [metrics[str(h)]["f1"] for h in HORIZONS]
@@ -110,10 +116,10 @@ def summarize_metrics(metrics: Dict[str, Dict[str, float]]) -> Dict[str, float]:
     ]
 
     summary = {
-        "mean_auroc": float(np.nanmean(auroc_vals)),
-        "mean_auprc": float(np.nanmean(auprc_vals)),
-        "mean_f1": float(np.nanmean(f1_vals)),
+        "mean_auroc": _nanmean_safe(auroc_vals),
+        "mean_auprc": _nanmean_safe(auprc_vals),
+        "mean_f1": _nanmean_safe(f1_vals),
     }
     if f1_best_vals:
-        summary["mean_f1_best"] = float(np.nanmean(f1_best_vals))
+        summary["mean_f1_best"] = _nanmean_safe(f1_best_vals)
     return summary

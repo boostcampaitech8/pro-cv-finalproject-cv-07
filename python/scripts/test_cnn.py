@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
 from src.engine.trainer_cnn import evaluate_cnn
-from src.metrics.metrics_cnn import summarize_metrics
+from src.metrics.metrics_cnn import HORIZONS, summarize_metrics
 from src.models.CNN import CNN
 
 
@@ -36,6 +36,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--exp_name", type=str, default="")
     parser.add_argument("--checkpoint_path", type=str, default="")
+    parser.add_argument("--split", choices=["val", "test"], default="val")
+    parser.add_argument("--data_dir", type=str, default="")
+    parser.add_argument("--split_file", type=str, default="")
+    parser.add_argument("--metrics_path", type=str, default="")
 
     return parser.parse_args()
 
@@ -48,11 +52,13 @@ def main() -> None:
     val_ds = CNNDataset(
         commodity=args.target_commodity,
         fold=args.fold,
-        split="val",
+        split=args.split,
         window_size=args.window_size,
         image_mode=args.image_mode,
         use_aux=args.use_aux,
         aux_type=args.aux_type,
+        data_dir=args.data_dir or None,
+        split_file=args.split_file or None,
     )
 
     val_loader = DataLoader(
@@ -68,13 +74,14 @@ def main() -> None:
     if args.use_aux:
         aux_dim += val_ds.news_dim
 
+    num_outputs = len(HORIZONS)
     model = CNN(
         backbone=args.backbone,
         in_chans=in_chans,
         aux_dim=aux_dim,
         fusion=args.fusion,
         dropout=0.1,
-        num_outputs=4,
+        num_outputs=num_outputs,
         pretrained=False,
     )
 
@@ -103,27 +110,34 @@ def main() -> None:
     else:
         loss_fn = torch.nn.MSELoss(reduction="none")
 
-    val_loss, metrics = evaluate_cnn(
+    horizon_weights = [1.0] * num_outputs
+    val_loss, metrics, extra_metrics, pos_stats = evaluate_cnn(
         model=model,
         dataloader=val_loader,
         loss_fn=loss_fn,
         device=device,
-        horizon_weights=[1.0, 1.0, 1.0, 1.0],
+        horizon_weights=horizon_weights,
     )
 
-    metrics_path = (
-        Path("src/outputs/predictions/cnn")
-        / args.target_commodity
-        / (args.exp_name or checkpoint_path.parents[1].name)
-        / f"fold_{args.fold}"
-        / "metrics.json"
-    )
+    if args.metrics_path:
+        metrics_path = Path(args.metrics_path)
+    else:
+        metrics_path = (
+            Path("src/outputs/predictions/cnn")
+            / args.target_commodity
+            / (args.exp_name or checkpoint_path.parents[1].name)
+            / f"fold_{args.fold}"
+            / "metrics.json"
+        )
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
     summary = {
-        "val_loss": val_loss,
+        f"{args.split}_loss": val_loss,
         "per_horizon": metrics,
         "summary": summarize_metrics(metrics) if metrics else {},
+        "pos_stats": pos_stats,
     }
+    if extra_metrics:
+        summary["extra_metrics"] = extra_metrics
     metrics_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
 
     print(f"Validation loss: {val_loss:.4f}")

@@ -192,7 +192,7 @@ def train_cnn(
     horizon_weights: Optional[List[float]],
     severity_loss_weight: float,
     checkpoint_path: Path,
-    log_path: Path,
+    log_path: Optional[Path],
     metrics_path: Path,
     threshold: float = 0.5,
     best_threshold: bool = False,
@@ -202,7 +202,8 @@ def train_cnn(
     meta: Optional[Dict[str, object]] = None,
 ) -> Dict[str, Dict[str, float]]:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
 
     best_score = -float("inf")
@@ -233,7 +234,8 @@ def train_cnn(
                 f"horizon_weights length {len(horizon_weights)} does not match horizons {len(HORIZONS)}"
             )
 
-    with log_path.open("w", encoding="utf-8") as log_file:
+    log_file = log_path.open("w", encoding="utf-8") if log_path is not None else None
+    try:
         for epoch in range(1, epochs + 1):
             if freeze_backbone_epochs > 0 and epoch == freeze_backbone_epochs + 1:
                 _set_backbone_trainable(True)
@@ -326,8 +328,9 @@ def train_cnn(
                 "min_epochs": min_epochs,
                 "freeze_backbone_epochs": freeze_backbone_epochs,
             }
-            log_file.write(json.dumps(_sanitize_for_json(log_entry), ensure_ascii=False) + "\n")
-            log_file.flush()
+            if log_file is not None:
+                log_file.write(json.dumps(_sanitize_for_json(log_entry), ensure_ascii=False) + "\n")
+                log_file.flush()
 
             mean_auprc = summary.get("mean_auprc", float("nan"))
             print(
@@ -348,6 +351,9 @@ def train_cnn(
                     f"(no improvement for {early_stop_patience} epochs after {min_epochs} min epochs)."
                 )
                 break
+    finally:
+        if log_file is not None:
+            log_file.close()
 
     if best_state is not None:
         # NOTE: Torch 2.1 + ConvNeXt depthwise conv can throw aliasing errors on load.

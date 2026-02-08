@@ -114,10 +114,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    data_dir = args.data_dir or f"src/datasets/local_bq_like/{args.commodity}"
+    data_dir = Path(args.data_dir or f"src/datasets/local_bq_like/{args.commodity}").resolve()
     split_path = Path(args.split_file) if args.split_file else Path(f"{args.commodity}_split.json")
     if not split_path.is_absolute():
-        split_path = Path(data_dir) / split_path
+        split_path = (data_dir / split_path).resolve()
+    else:
+        split_path = split_path.resolve()
 
     date_tag = args.date_tag or _infer_date_tag(split_path)
 
@@ -152,7 +154,7 @@ def main() -> None:
         save_gradcam=args.save_gradcam,
         gradcam_stage=args.gradcam_stage,
         gradcam_method=args.gradcam_method,
-        data_dir=data_dir,
+        data_dir=str(data_dir),
         split_file=str(split_path),
         prediction_root=args.prediction_root,
         date_tag=date_tag,

@@ -13,5 +13,7 @@ python/--*
 scripts/
 !python/scripts/
 !python/scripts/*
+python/scripts/lightning_logs/
+python/scripts/lightning_logs/**
 
 __pycache__/
