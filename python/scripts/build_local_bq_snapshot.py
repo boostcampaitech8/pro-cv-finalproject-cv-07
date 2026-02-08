@@ -164,14 +164,23 @@ def main(cfg: SnapshotConfig) -> None:
     if len(price_df) <= cfg.inference_days:
         raise ValueError("Not enough rows to build inference tail.")
 
-    inference_df = price_df.tail(cfg.inference_days).copy()
-    train_end = price_df.iloc[-cfg.inference_days - 1]["time"]
+    # Use the last date where target horizon exists (avoid leaking future data)
+    valid_mask = price_df[target_col].notna()
+    if not valid_mask.any():
+        raise ValueError(f"No valid rows found for target {target_col}.")
+    last_valid_time = price_df.loc[valid_mask, "time"].max()
+    available_df = price_df[price_df["time"] <= last_valid_time].copy()
+    if len(available_df) <= cfg.inference_days:
+        raise ValueError("Not enough rows (after target cutoff) to build inference tail.")
+
+    inference_df = available_df.tail(cfg.inference_days).copy()
+    train_end = available_df.iloc[-cfg.inference_days - 1]["time"]
 
     train_start = train_end - pd.DateOffset(years=cfg.train_years) + pd.Timedelta(days=1)
     if cfg.extra_days and cfg.extra_days > 0:
         train_start = train_start - pd.Timedelta(days=cfg.extra_days)
 
-    price_snapshot = price_df[price_df["time"] >= train_start].copy()
+    price_snapshot = available_df[available_df["time"] >= train_start].copy()
     train_df = price_snapshot[price_snapshot["time"] <= train_end].copy()
 
     if cfg.drop_missing_targets:

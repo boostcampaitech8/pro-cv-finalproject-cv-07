@@ -1,6 +1,8 @@
 python/src/datasets/
 *outputs/
 python/scripts/lightning_logs
+python/lightning_logs
+**/lightning_logs/
 _archive/
 *.patch
 

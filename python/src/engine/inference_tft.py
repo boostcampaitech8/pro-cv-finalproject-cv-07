@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
+from pandas.tseries.offsets import BDay
 
 from src.data.dataset_tft import TFTDataLoader
 from src.data.bigquery_loader import load_price_table
@@ -37,6 +38,21 @@ def _resolve_checkpoint_path(
     )
 
 
+def _load_scaler(checkpoint_path: Path) -> Optional[Dict[str, np.ndarray]]:
+    scaler_path = checkpoint_path.parent / "scaler.npz"
+    if not scaler_path.exists():
+        return None
+    sc = np.load(scaler_path, allow_pickle=True)
+    return {
+        "scale_x": bool(sc.get("scale_x", False)),
+        "scale_y": bool(sc.get("scale_y", False)),
+        "x_mean": sc.get("x_mean", None),
+        "x_std": sc.get("x_std", None),
+        "y_mean": sc.get("y_mean", None),
+        "y_std": sc.get("y_std", None),
+    }
+
+
 def _resolve_output_root(
     commodity: str,
     exp_name: str,
@@ -58,6 +74,61 @@ def _resolve_output_root(
 
 def _normalize_dates(dates: Sequence) -> List[str]:
     return [str(d)[:10] for d in dates]
+
+def _ensure_unique_dates(df: pd.DataFrame, date_col: str, label: str) -> None:
+    if date_col not in df.columns:
+        return
+    date_series = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+    dup_mask = date_series.duplicated()
+    if dup_mask.any():
+        dup_dates = date_series[dup_mask].dropna().unique().tolist()
+        sample = ", ".join(dup_dates[:5])
+        raise ValueError(f"Duplicate dates in {label}: {sample}")
+
+
+def _build_trading_calendar(data_dir: Path, commodity: str) -> List[str]:
+    candidates = [
+        data_dir / "test_price.csv",
+        data_dir / "inference_price.csv",
+        data_dir / "train_price.csv",
+        data_dir.parent.parent / f"{commodity}_future_price.csv",
+    ]
+    dates: List[str] = []
+    for path in candidates:
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        date_col = None
+        for cand in ("time", "trade_date", "date"):
+            if cand in df.columns:
+                date_col = cand
+                break
+        if date_col is None:
+            continue
+        dates.extend(
+            pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d").tolist()
+        )
+    dates = [d for d in dates if d and d != "NaT"]
+    return sorted(set(dates))
+
+
+def _next_trading_dates(
+    as_of: str,
+    horizons: Sequence[int],
+    trading_calendar: Sequence[str],
+) -> Dict[int, str]:
+    mapping: Dict[int, str] = {}
+    if trading_calendar and as_of in trading_calendar:
+        idx = trading_calendar.index(as_of)
+        future = trading_calendar[idx + 1 :]
+        for h in horizons:
+            if h - 1 < len(future):
+                mapping[int(h)] = future[h - 1]
+    base = pd.to_datetime(as_of)
+    for h in horizons:
+        if int(h) not in mapping:
+            mapping[int(h)] = (base + BDay(int(h))).strftime("%Y-%m-%d")
+    return mapping
 
 
 def _build_window_date_lookup(data: pd.DataFrame) -> Dict[str, int]:
@@ -114,8 +185,12 @@ def _save_importance_files(
         return
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    flatten_groups = len(horizon_groups) == 1
     for group, idxs in horizon_groups.items():
-        group_dir = out_dir / f"h{group}" / date_str
+        if flatten_groups:
+            group_dir = out_dir / date_str
+        else:
+            group_dir = out_dir / f"h{group}" / date_str
         group_dir.mkdir(parents=True, exist_ok=True)
 
         temporal_weights = horizon_attn[idxs].mean(axis=0)
@@ -228,6 +303,7 @@ def run_inference_tft(
     checkpoint_path: Optional[str] = None,
     output_root: Optional[str] = None,
     data_dir: str = "src/datasets",
+    split_file: Optional[str] = None,
     data_source: str = "local",
     bq_project_id: Optional[str] = None,
     bq_dataset_id: Optional[str] = None,
@@ -237,6 +313,7 @@ def run_inference_tft(
     batch_size: int = 128,
     num_workers: int = 4,
     device: Optional[str] = None,
+    seed: Optional[int] = None,
     use_variable_selection: bool = True,
     quantiles: Optional[Sequence[float]] = None,
     include_targets: bool = True,
@@ -260,6 +337,7 @@ def run_inference_tft(
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     exp_name = exp_name or f"tft_w{seq_length}_h{'-'.join(map(str, horizons))}"
+    ckpt_path = _resolve_checkpoint_path(commodity, fold, horizons, checkpoint_path)
 
     price_file = f"preprocessing/{commodity}_feature_engineering.csv"
     news_file = "news_features.csv"
@@ -294,11 +372,8 @@ def run_inference_tft(
                 price_source = pd.concat([train_tail, infer_df], ignore_index=True)
             else:
                 price_source = infer_df.tail(window_len)
-            price_source = (
-                price_source.drop_duplicates(subset=["time"], keep="last")
-                .sort_values("time")
-                .reset_index(drop=True)
-            )
+            _ensure_unique_dates(price_source, "time", "inference_price (bq merged)")
+            price_source = price_source.sort_values("time").reset_index(drop=True)
             if len(price_source) < window_len:
                 raise ValueError(
                     f"Not enough rows for inference window: need {window_len}, got {len(price_source)}"
@@ -310,29 +385,66 @@ def run_inference_tft(
                 table=bq_train_table,
                 commodity=commodity,
             )
+            _ensure_unique_dates(price_source, "time", "train_price (bq)")
     elif split == "inference":
-        price_df = pd.read_csv(price_source)
-        price_df = (
-            price_df.drop_duplicates(subset=["time"], keep="last")
-            .sort_values("time")
-            .reset_index(drop=True)
-        )
-        if len(price_df) < window_len:
-            raise ValueError(
-                f"Not enough rows for inference window: need {window_len}, got {len(price_df)}"
+        infer_path = Path(data_dir) / "inference_price.csv"
+        if infer_path.exists():
+            infer_df = pd.read_csv(infer_path)
+        else:
+            infer_df = pd.read_csv(price_source)
+        _ensure_unique_dates(infer_df, "time", "inference_price")
+        infer_df = infer_df.sort_values("time").reset_index(drop=True)
+        if len(infer_df) < window_len:
+            pad_len = window_len - len(infer_df)
+            train_path = Path(data_dir) / "train_price.csv"
+            if train_path.exists():
+                train_df = pd.read_csv(train_path)
+            else:
+                train_df = pd.read_csv(price_source)
+            _ensure_unique_dates(train_df, "time", "train_price")
+            infer_start = infer_df["time"].min()
+            train_tail = (
+                train_df[train_df["time"] < infer_start]
+                .sort_values("time")
+                .tail(pad_len)
             )
-        price_source = price_df.tail(window_len).reset_index(drop=True)
+            price_source = pd.concat([train_tail, infer_df], ignore_index=True)
+        else:
+            price_source = infer_df.tail(window_len)
+        _ensure_unique_dates(price_source, "time", "inference_price (merged)")
+        price_source = price_source.sort_values("time").reset_index(drop=True)
+        if len(price_source) < window_len:
+            raise ValueError(
+                f"Not enough rows for inference window: need {window_len}, got {len(price_source)}"
+            )
+
+    split_path = Path(split_file) if split_file else Path(data_dir) / "rolling_fold.json"
+    if not split_path.is_absolute():
+        candidate = Path(data_dir) / split_path
+        if candidate.exists():
+            split_path = candidate
 
     data_loader = TFTDataLoader(
         price_data_path=price_source,
         news_data_path=str(Path(data_dir) / news_file),
-        split_file=str(Path(data_dir) / "rolling_fold.json"),
+        split_file=str(split_path),
         seq_length=seq_length,
         horizons=list(horizons),
         batch_size=batch_size,
         num_workers=num_workers,
         require_targets=(split != "inference"),
+        seed=seed,
     )
+
+    # Load scaler saved during training so inference matches training preprocessing.
+    scaler = _load_scaler(ckpt_path)
+    y_mean = None
+    y_std = None
+    if scaler is not None:
+        data_loader.fold_scalers[fold] = scaler
+        if scaler.get("scale_y", False):
+            y_mean = scaler.get("y_mean")
+            y_std = scaler.get("y_std")
 
     if split == "test":
         dates, data_loader_iter = data_loader.get_test_loader(
@@ -349,6 +461,7 @@ def run_inference_tft(
         dates = valid_dates
 
     dates = _normalize_dates(dates)
+    trading_calendar = _build_trading_calendar(Path(data_dir), commodity)
     all_dates = pd.to_datetime(data_loader.data["time"]).dt.strftime("%Y-%m-%d").tolist()
     date_to_idx = _build_window_date_lookup(data_loader.data)
     date_to_close: Dict[str, float] = {}
@@ -361,7 +474,7 @@ def run_inference_tft(
         date_to_close = dict(zip(close_series["date"].tolist(), close_series["close"].tolist()))
     horizon_groups = _prepare_horizon_groups(horizons, importance_groups or [])
 
-    checkpoint = _load_checkpoint(_resolve_checkpoint_path(commodity, fold, horizons, checkpoint_path), device)
+    checkpoint = _load_checkpoint(ckpt_path, device)
     model_cfg = checkpoint.get("config", {})
 
     model = TemporalFusionTransformer(
@@ -476,10 +589,11 @@ def run_inference_tft(
                     else:
                         pred_row = preds[i]
 
-                    pred_dates = [
-                        (pd.to_datetime(date_str) + pd.Timedelta(days=int(h))).strftime("%Y-%m-%d")
-                        for h in horizons
-                    ]
+                    if y_mean is not None and y_std is not None:
+                        pred_row = pred_row * y_std + y_mean
+
+                    pred_date_map = _next_trading_dates(date_str, horizons, trading_calendar)
+                    pred_dates = [pred_date_map[int(h)] for h in horizons]
                     pred_close = [float(base_close * np.exp(v)) for v in pred_row]
 
                     plots_dir = (
@@ -507,6 +621,15 @@ def run_inference_tft(
 
     preds = np.concatenate(all_preds, axis=0)
     trues = np.concatenate(all_trues, axis=0)
+
+    # Inverse scale predictions/targets if y-scaling was used during training.
+    if y_mean is not None and y_std is not None:
+        if preds.ndim == 3:
+            preds = preds * y_std[None, :, None] + y_mean[None, :, None]
+        else:
+            preds = preds * y_std[None, :] + y_mean[None, :]
+        if trues is not None and trues.size:
+            trues = trues * y_std[None, :] + y_mean[None, :]
 
     if len(dates) != preds.shape[0]:
         raise ValueError(f"Date count {len(dates)} does not match predictions {preds.shape[0]}.")
@@ -537,6 +660,9 @@ def run_inference_tft(
 
         target_vals = trues[idx] if include_targets else None
 
+        pred_date_map = _next_trading_dates(date_str, horizons, trading_calendar)
+        pred_dates_payload = {f"h{int(h)}": pred_date_map[int(h)] for h in horizons}
+
         payload = build_forecast_payload(
             model="tft",
             commodity=commodity,
@@ -551,6 +677,7 @@ def run_inference_tft(
             extra_meta={
                 "split": split,
             },
+            prediction_dates=pred_dates_payload,
         )
 
         base_close = date_to_close.get(date_str)

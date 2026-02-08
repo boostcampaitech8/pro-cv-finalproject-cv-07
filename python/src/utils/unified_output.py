@@ -104,6 +104,7 @@ def build_forecast_payload(
     quantiles: Optional[Mapping[str, Sequence[float]]] = None,
     model_variant: Optional[str] = None,
     extra_meta: Optional[Mapping[str, Any]] = None,
+    prediction_dates: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -118,7 +119,7 @@ def build_forecast_payload(
             model_variant=model_variant,
             extra=extra_meta,
         ),
-        "prediction_dates": build_prediction_dates(as_of, horizons),
+        "prediction_dates": prediction_dates or build_prediction_dates(as_of, horizons),
         "predictions": {
             "log_return": map_horizon_values(predictions, horizons),
         },

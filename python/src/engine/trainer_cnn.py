@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from src.metrics.metrics_cnn import compute_metrics_per_horizon, summarize_metrics
+from src.metrics.metrics_cnn import HORIZONS, compute_metrics_per_horizon, summarize_metrics
 
 
 def _compute_weighted_loss(
@@ -62,7 +62,7 @@ def _build_binary_labels(
 
 def _compute_pos_stats(y_true: np.ndarray) -> Dict[str, Dict[str, float]]:
     stats: Dict[str, Dict[str, float]] = {}
-    for idx, horizon in enumerate([1, 5, 10, 20]):
+    for idx, horizon in enumerate(HORIZONS):
         labels = y_true[:, idx]
         pos_count = int(labels.sum())
         total = int(labels.shape[0])
@@ -84,7 +84,7 @@ def evaluate_cnn(
     severity_loss_weight: float = 0.0,
     threshold: float = 0.5,
     best_threshold: bool = False,
-) -> Tuple[float, Dict[str, Dict[str, float]]]:
+) -> Tuple[float, Dict[str, Dict[str, float]], Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]]]:
     model.eval()
 
     all_preds: List[torch.Tensor] = []
@@ -123,17 +123,25 @@ def evaluate_cnn(
     if y_true_q95 is None or y_true_q95.shape[0] != preds.shape[0]:
         y_true_q95 = (targets >= 1.0).astype(int)
 
+    thresholds_q95 = None
+    if hasattr(dataloader.dataset, "q95"):
+        thresholds_q95 = np.asarray(dataloader.dataset.q95, dtype=np.float32)
+        if thresholds_q95.shape[0] != preds.shape[1]:
+            thresholds_q95 = None
+
     metrics = compute_metrics_per_horizon(
         y_true_q95,
         preds,
         threshold=threshold,
         best_threshold=best_threshold,
+        thresholds=thresholds_q95,
     )
     metrics_best = compute_metrics_per_horizon(
         y_true_q95,
         preds,
         threshold=threshold,
         best_threshold=True,
+        thresholds=None,
     )
     for horizon in metrics:
         metrics[horizon]["f1_best"] = metrics_best[horizon]["f1"]
@@ -145,17 +153,24 @@ def evaluate_cnn(
         y_true = _build_binary_labels(dataloader.dataset, label_name)
         if y_true is None or y_true.shape[0] != preds.shape[0]:
             continue
+        thresholds_extra = getattr(dataloader.dataset, label_name, None)
+        if thresholds_extra is not None:
+            thresholds_extra = np.asarray(thresholds_extra, dtype=np.float32)
+            if thresholds_extra.shape[0] != preds.shape[1]:
+                thresholds_extra = None
         extra_metrics[label_name] = compute_metrics_per_horizon(
             y_true,
             preds,
             threshold=threshold,
             best_threshold=best_threshold,
+            thresholds=thresholds_extra,
         )
         extra_best = compute_metrics_per_horizon(
             y_true,
             preds,
             threshold=threshold,
             best_threshold=True,
+            thresholds=None,
         )
         for horizon in extra_metrics[label_name]:
             extra_metrics[label_name][horizon]["f1_best"] = extra_best[horizon]["f1"]
@@ -184,6 +199,7 @@ def train_cnn(
     best_metric: str = "auprc",
     min_epochs: int = 20,
     freeze_backbone_epochs: int = 0,
+    meta: Optional[Dict[str, object]] = None,
 ) -> Dict[str, Dict[str, float]]:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,6 +208,7 @@ def train_cnn(
     best_score = -float("inf")
     best_state = None
     best_metrics: Dict[str, Dict[str, float]] = {}
+    best_val_loss: Optional[float] = None
     best_epoch = -1
 
     model.to(device)
@@ -207,6 +224,14 @@ def train_cnn(
         _set_backbone_trainable(False)
 
     epochs_without_improve = 0
+
+    if horizon_weights is not None:
+        if len(horizon_weights) == 1:
+            horizon_weights = horizon_weights * len(HORIZONS)
+        elif len(horizon_weights) != len(HORIZONS):
+            raise ValueError(
+                f"horizon_weights length {len(horizon_weights)} does not match horizons {len(HORIZONS)}"
+            )
 
     with log_path.open("w", encoding="utf-8") as log_file:
         for epoch in range(1, epochs + 1):
@@ -278,6 +303,7 @@ def train_cnn(
                     "epoch": epoch,
                 }
                 best_metrics = val_metrics
+                best_val_loss = val_loss
                 best_epoch = epoch
                 torch.save(best_state, checkpoint_path)
                 epochs_without_improve = 0
@@ -332,10 +358,19 @@ def train_cnn(
         }
         model.load_state_dict(safe_state_dict)
 
+    overall = summarize_metrics(best_metrics) if best_metrics else {}
     final_metrics = {
+        "model": "cnn",
+        "commodity": meta.get("commodity") if meta else None,
+        "fold": meta.get("fold") if meta else None,
+        "window_size": meta.get("window_size") if meta else None,
+        "window": meta.get("window_size") if meta else None,
+        "horizons": HORIZONS,
+        "overall": overall,
+        "summary": overall,
         "per_horizon": best_metrics,
-        "summary": summarize_metrics(best_metrics) if best_metrics else {},
         "best_epoch": best_epoch,
+        "best_val_loss": best_val_loss,
     }
     if best_metrics:
         final_metrics["pos_stats"] = val_pos_stats

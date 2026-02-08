@@ -276,7 +276,8 @@ def main(config: TrainConfig):
         seq_length=config.seq_length,
         horizons=config.horizons,
         batch_size=config.batch_size,
-        num_workers=config.num_workers
+        num_workers=config.num_workers,
+        seed=config.seed
     )
 
     _, valid_loader, validT = data_loader.get_fold_loaders(fold)

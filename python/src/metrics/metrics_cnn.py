@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
 
-HORIZONS = [1, 5, 10, 20]
+HORIZONS = list(range(1, 21))
 
 
 def _to_numpy(array_like) -> np.ndarray:
@@ -26,7 +26,15 @@ def _safe_auprc(y_true: np.ndarray, y_score: np.ndarray) -> float:
 
 
 def _best_f1_threshold(y_true: np.ndarray, y_score: np.ndarray) -> Tuple[float, float]:
-    thresholds = np.linspace(0.0, 1.0, num=101)
+    if y_score.size == 0:
+        return 0.0, 0.5
+    score_min = float(np.nanmin(y_score))
+    score_max = float(np.nanmax(y_score))
+    if not np.isfinite(score_min) or not np.isfinite(score_max):
+        return 0.0, 0.5
+    if score_min == score_max:
+        return 0.0, score_min
+    thresholds = np.linspace(score_min, score_max, num=101)
     best_f1 = -1.0
     best_thresh = 0.5
 
@@ -73,14 +81,18 @@ def compute_metrics_per_horizon(
     y_score: np.ndarray,
     threshold: float = 0.5,
     best_threshold: bool = False,
+    thresholds: np.ndarray | None = None,
 ) -> Dict[str, Dict[str, float]]:
     metrics: Dict[str, Dict[str, float]] = {}
 
     for idx, horizon in enumerate(HORIZONS):
+        thresh_val = threshold
+        if thresholds is not None and not best_threshold:
+            thresh_val = float(thresholds[idx])
         metrics[str(horizon)] = compute_binary_metrics(
             y_true_high[:, idx],
             y_score[:, idx],
-            threshold=threshold,
+            threshold=thresh_val,
             best_threshold=best_threshold,
         )
 

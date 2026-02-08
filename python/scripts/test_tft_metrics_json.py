@@ -128,6 +128,7 @@ def main(config: TrainConfig):
         horizons=config.horizons,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
+        seed=config.seed,
     )
 
     for fold in config.fold:

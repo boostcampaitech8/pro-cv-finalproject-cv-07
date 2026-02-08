@@ -4,13 +4,11 @@ Build rolling split JSONs from BigQuery price tables (train/inference) per symbo
 Outputs:
   - {commodity}_split.json
 
-Example:
+Example (deploy split, no fixed_test):
 python scripts/build_bq_split.py \
   --project_id esoteric-buffer-485608-g5 \
   --dataset_id final_proj \
-  --commodities corn wheat \
-  --val_months 3 \
-  --test_days 20 \
+  --commodities corn \
   --output_dir src/datasets/bq_splits
 """
 
@@ -43,12 +41,12 @@ class BQSplitConfig:
 
     output_dir: str = "src/datasets/bq_splits"
 
+
     # Provide either commodities (preferred) or symbols
     commodities: List[str] = field(default_factory=lambda: ["corn"])
     symbols: List[str] = field(default_factory=list)
 
     val_months: int = 3
-    test_days: int = 20
     write_default_split: bool = False
 
     # Optional cap for end date (YYYY-MM-DD)
@@ -57,32 +55,50 @@ class BQSplitConfig:
     check_inference: bool = True
 
 
-def _build_split(dates: list[str], val_months: int, test_days: int) -> dict:
+def _build_split(
+    dates: list[str],
+    val_months: int,
+    test_days: int,
+    include_test: bool,
+    test_dates_override: Optional[list[str]] = None,
+) -> dict:
     if not dates:
         raise ValueError("No dates available for split.")
 
     end_date = pd.to_datetime(dates[-1])
     test_start = None
-    if test_days and test_days > 0:
-        test_start = end_date - pd.Timedelta(days=test_days - 1)
+    if include_test:
+        if test_dates_override:
+            test_start = pd.to_datetime(test_dates_override[0])
+        elif test_days and test_days > 0:
+            test_start = end_date - pd.Timedelta(days=test_days - 1)
 
     if val_months and val_months > 0:
         if test_start is None:
             val_start = (end_date - pd.DateOffset(months=val_months)) + pd.Timedelta(days=1)
         else:
-            val_start = (test_start - pd.DateOffset(months=val_months)) + pd.Timedelta(days=1)
+            # If test_start is beyond available dates, base validation on end_date instead.
+            anchor = test_start if test_start <= end_date else end_date
+            val_start = (anchor - pd.DateOffset(months=val_months)) + pd.Timedelta(days=1)
     else:
         val_start = None
 
     train_dates: list[str] = []
     val_dates: list[str] = []
     test_dates: list[str] = []
+    test_set = set(test_dates_override or [])
 
     for d in dates:
         dt = pd.to_datetime(d)
-        if test_start is not None and dt >= test_start:
-            test_dates.append(d)
-        elif val_start is not None and dt >= val_start:
+        if include_test:
+            if test_dates_override:
+                if d in test_set:
+                    test_dates.append(d)
+                    continue
+            elif test_start is not None and dt >= test_start:
+                test_dates.append(d)
+                continue
+        if val_start is not None and dt >= val_start:
             val_dates.append(d)
         else:
             train_dates.append(d)
@@ -95,22 +111,27 @@ def _build_split(dates: list[str], val_months: int, test_days: int) -> dict:
     date_to_idx = {d: i for i, d in enumerate(dates)}
     train_indices = [date_to_idx[d] for d in train_dates]
     val_indices = [date_to_idx[d] for d in val_dates]
-    test_indices = [date_to_idx[d] for d in test_dates]
+    test_indices = []
+    if test_dates and all(d in date_to_idx for d in test_dates):
+        test_indices = [date_to_idx[d] for d in test_dates]
+
+    meta = {
+        "split_type": "recent_months",
+        "val_months": val_months,
+        "start_date": dates[0],
+        "end_date": dates[-1],
+        "n_days": len(dates),
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if include_test:
+        meta["test_days"] = test_days
+        meta["fixed_test"] = {
+            "t_dates": test_dates,
+            "t_indices": test_indices,
+        }
 
     return {
-        "meta": {
-            "split_type": "recent_months",
-            "val_months": val_months,
-            "test_days": test_days,
-            "start_date": dates[0],
-            "end_date": dates[-1],
-            "n_days": len(dates),
-            "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "fixed_test": {
-                "t_dates": test_dates,
-                "t_indices": test_indices,
-            },
-        },
+        "meta": meta,
         "folds": [
             {
                 "fold": 0,
@@ -186,6 +207,13 @@ def main(cfg: BQSplitConfig) -> None:
     output_root = Path(cfg.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
 
+    if cfg.val_months != 3:
+        print("[WARN] val_months is forced to 3 for deployment splits.")
+        cfg.val_months = 3
+    if cfg.write_default_split:
+        print("[WARN] write_default_split is disabled to keep a single {commodity}_split.json.")
+        cfg.write_default_split = False
+
     for commodity, symbol in targets:
         dates = _fetch_dates(
             client=client,
@@ -199,7 +227,16 @@ def main(cfg: BQSplitConfig) -> None:
             print(f"[WARN] No dates found for {symbol} in {cfg.train_table}.")
             continue
 
-        split = _build_split(dates, cfg.val_months, cfg.test_days)
+        include_test = False
+        test_override = None
+
+        split = _build_split(
+            dates,
+            cfg.val_months,
+            0,
+            include_test=include_test,
+            test_dates_override=test_override,
+        )
         split["meta"]["commodity"] = commodity
         split["meta"]["symbol"] = symbol
         if cfg.end_date:

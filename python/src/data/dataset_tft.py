@@ -1,9 +1,17 @@
 import numpy as np
 import pandas as pd
 import json
+import random
 import torch
 from torch.utils.data import Dataset
 from typing import List, Tuple, Dict, Optional
+
+
+def _seed_worker(worker_id: int) -> None:
+    # Ensure each worker has a deterministic but unique seed
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 class SimpleYScaler:
     """y_mean, y_std를 sklearn scaler처럼 사용"""
@@ -197,6 +205,21 @@ def load_data_with_news(
     else:
         price_df = pd.read_csv(price_data_path)
     print(f"✓ Price data loaded: {len(price_df)} rows, {len(price_df.columns)} columns")
+
+    # 중복 날짜 체크 (엄격하게 에러 처리)
+    date_col = None
+    if "time" in price_df.columns:
+        date_col = "time"
+    elif "date" in price_df.columns:
+        date_col = "date"
+    if date_col is None:
+        raise ValueError("가격 데이터에 날짜 컬럼(time 또는 date)이 없습니다")
+    date_key = pd.to_datetime(price_df[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+    dup_mask = date_key.duplicated()
+    if dup_mask.any():
+        dup_dates = date_key[dup_mask].dropna().unique().tolist()
+        sample = ", ".join(dup_dates[:5])
+        raise ValueError(f"중복 날짜가 존재합니다: {sample}")
     
     # 뉴스 데이터 로드
     try:
@@ -396,7 +419,8 @@ class TFTDataLoader:
         batch_size: int,
         num_workers: int = 4,
         feature_columns: Optional[List[str]] = None,
-        require_targets: bool = True
+        require_targets: bool = True,
+        seed: Optional[int] = None
     ):
         self.price_data_path = price_data_path
         self.news_data_path = news_data_path
@@ -407,6 +431,7 @@ class TFTDataLoader:
         self.num_workers = num_workers
         self.feature_columns = feature_columns
         self.require_targets = require_targets
+        self.seed = seed
         
         # 데이터 로드 (런타임에 정렬)
         self.data = load_data_with_news(price_data_path, news_data_path)
@@ -485,12 +510,21 @@ class TFTDataLoader:
             torch.FloatTensor(validY)
         )
         
+        generator = None
+        worker_init_fn = None
+        if self.seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + int(fold_index))
+            worker_init_fn = _seed_worker
+
         train_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=worker_init_fn,
+            generator=generator
         )
         
         valid_loader = torch.utils.data.DataLoader(
@@ -498,7 +532,9 @@ class TFTDataLoader:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=worker_init_fn,
+            generator=generator
         )
         
         return train_loader, valid_loader, validT
@@ -529,12 +565,21 @@ class TFTDataLoader:
             torch.FloatTensor(testY)
         )
         
+        generator = None
+        worker_init_fn = None
+        if self.seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + int(fold_index) + 1000)
+            worker_init_fn = _seed_worker
+
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=worker_init_fn,
+            generator=generator
         )
         
         return test_dates, test_loader
@@ -560,11 +605,19 @@ class TFTDataLoader:
             torch.FloatTensor(X),
             torch.FloatTensor(Y)
         )
+        generator = None
+        worker_init_fn = None
+        if self.seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(self.seed + 2000)
+            worker_init_fn = _seed_worker
         loader = torch.utils.data.DataLoader(
             dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=worker_init_fn,
+            generator=generator
         )
         return dates, loader

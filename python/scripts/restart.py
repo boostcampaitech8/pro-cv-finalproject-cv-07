@@ -192,7 +192,7 @@ def main(cfg: TrainConfig):
     cfg.fold = [0,1,2,3,4,5,6,7]
     seq_lengths = [5, 20, 60]
     prediction_length = 20
-
+#학습 할 때 가중치가 바뀌지 . 모델이 튜닝 . h1 h5 h20 
     for fold in cfg.fold:
         print(f"\n🔄 Processing Fold {fold}")
 

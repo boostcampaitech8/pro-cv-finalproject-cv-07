@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+import pandas as pd
+from pandas.tseries.offsets import BDay
 
 from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
 from src.interpretation.cnn_visualizer import GradCAM
@@ -12,7 +14,7 @@ from src.models.CNN import CNN
 from src.utils.unified_output import build_anomaly_payload, map_severity_levels, write_json
 
 
-HORIZONS = [1, 5, 10, 20]
+HORIZONS = list(range(1, 21))
 
 
 def _find_last_conv(module: torch.nn.Module) -> Optional[torch.nn.Module]:
@@ -150,12 +152,65 @@ def _build_severity_levels(
     return _build_severity_levels_from_values(raw_returns, q80, q90, q95)
 
 
+def _resolve_checkpoint_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.name == "best_model.pt":
+        alt = path.with_name("best.pt")
+        if alt.exists():
+            return alt
+    if path.name == "best.pt":
+        alt = path.with_name("best_model.pt")
+        if alt.exists():
+            return alt
+    return path
+
+
 def _load_checkpoint(model: torch.nn.Module, checkpoint_path: Path, device: str) -> None:
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     model.load_state_dict(state_dict, strict=True)
+
+
+def _infer_date_tag(split_path: Optional[Path]) -> str:
+    if split_path is None or not split_path.exists():
+        return "latest"
+    try:
+        payload = json.loads(split_path.read_text())
+        meta = payload.get("meta", {})
+        if isinstance(meta, dict):
+            inference_window = meta.get("inference_window", {})
+            for key in ("end", "end_date"):
+                if key in inference_window:
+                    return str(inference_window[key])[:10]
+            for key in ("test_end_date", "end_date"):
+                if key in meta:
+                    return str(meta[key])[:10]
+    except Exception:
+        pass
+    return "latest"
+
+
+def _next_trading_dates(
+    as_of: str,
+    horizons: Sequence[int],
+    trading_dates: Sequence[str],
+) -> Dict[int, str]:
+    mapping: Dict[int, str] = {}
+    if as_of in trading_dates:
+        idx = trading_dates.index(as_of)
+        future = trading_dates[idx + 1 :]
+        for h in horizons:
+            if h - 1 < len(future):
+                mapping[h] = future[h - 1]
+    base = pd.to_datetime(as_of)
+    for h in horizons:
+        if h not in mapping:
+            mapping[h] = (base + BDay(h)).strftime("%Y-%m-%d")
+    return mapping
 
 
 def run_inference_cnn(
@@ -166,6 +221,7 @@ def run_inference_cnn(
     backbone: str,
     fusion: str,
     exp_name: str,
+    split: str = "val",
     use_aux: bool = False,
     aux_type: str = "news",
     checkpoint_path: Optional[str] = None,
@@ -175,24 +231,37 @@ def run_inference_cnn(
     save_gradcam: bool = False,
     gradcam_stage: Optional[int] = None,
     gradcam_method: str = "gradcam",
-    save_legacy: bool = True,
-    save_unified: bool = True,
+    save_legacy: bool = False,
+    save_unified: bool = False,
+    data_dir: Optional[str] = None,
+    split_file: Optional[str] = None,
+    prediction_root: Optional[str] = None,
+    date_tag: Optional[str] = None,
+    latest_only: bool = True,
+    write_json: bool = False,
+    write_csv: bool = True,
 ) -> Path:
     """
-    Run inference on the validation split and save per-date JSON outputs.
+    Run inference on the requested split and save per-date JSON outputs.
     Legacy outputs go to src/outputs/predictions/cnn, unified outputs to
     src/outputs/predictions/unified/cnn.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
+    split_path = Path(split_file) if split_file else None
+    if split_path is not None and not split_path.is_absolute() and data_dir:
+        split_path = Path(data_dir) / split_path
+
     dataset = CNNDataset(
         commodity=commodity,
         fold=fold,
-        split="val",
+        split=split,
         window_size=window_size,
         image_mode=image_mode,
         use_aux=use_aux,
         aux_type=aux_type,
+        data_dir=data_dir,
+        split_file=str(split_path) if split_path else None,
     )
 
     dataloader = DataLoader(
@@ -232,34 +301,40 @@ def run_inference_cnn(
     model.to(device)
     model.eval()
 
-    results_root = (
-        Path("src/outputs/predictions/cnn")
-        / commodity
-        / exp_name
-        / f"fold_{fold}"
-        / "results"
-    )
-    if save_legacy:
+    date_tag = date_tag or _infer_date_tag(split_path)
+    if prediction_root:
+        pred_root = Path(
+            prediction_root.format(
+                commodity=commodity,
+                date=date_tag,
+            )
+        )
+    else:
+        pred_root = (
+            Path("src/outputs/predictions/cnn")
+            / commodity
+            / exp_name
+            / f"fold_{fold}"
+        )
+
+    results_root = pred_root / f"w{window_size}" / "results"
+    if write_json and save_legacy:
         results_root.mkdir(parents=True, exist_ok=True)
 
-    unified_root = (
-        Path("src/outputs/predictions/unified/cnn")
-        / commodity
-        / exp_name
-        / f"fold_{fold}"
-        / "results"
-    )
-    if save_unified:
+    unified_root = pred_root / f"w{window_size}" / "results_unified"
+    if write_json and save_unified:
         unified_root.mkdir(parents=True, exist_ok=True)
 
     q80 = np.asarray(dataset.q80, dtype=np.float32)
     q90 = np.asarray(dataset.q90, dtype=np.float32)
     q95 = np.asarray(dataset.q95, dtype=np.float32)
 
+    is_infer = split == "infer"
     raw_returns_dict: Dict[str, np.ndarray] = {}
-    for idx, anchor_idx in enumerate(dataset.anchor_indices):
-        date = dataset.anchor_dates[idx]
-        raw_returns_dict[date] = dataset.anchor_returns[idx]
+    if not is_infer:
+        for idx, anchor_idx in enumerate(dataset.anchor_indices):
+            date = dataset.anchor_dates[idx]
+            raw_returns_dict[date] = dataset.anchor_returns[idx]
 
     gradcam = None
     gradcam_root = results_root / "gradcam"
@@ -272,7 +347,7 @@ def run_inference_cnn(
     if first_batch is None:
         return results_root
 
-    if save_gradcam:
+    if save_gradcam and write_json:
         if gradcam_stage is None and "convnext" in backbone.lower():
             images = first_batch["image"].to(device)
             aux = first_batch.get("aux")
@@ -305,6 +380,9 @@ def run_inference_cnn(
         else:
             print("Warning: Grad-CAM skipped (no suitable conv layer found).")
 
+    csv_rows: List[Dict[str, str]] = []
+    latest_date = max(dataset.anchor_dates) if dataset.anchor_dates else None
+
     def _process_batch(batch, batch_idx: int) -> int:
         images = batch["image"].to(device)
         aux = batch.get("aux")
@@ -319,24 +397,38 @@ def run_inference_cnn(
 
         for i, date_str in enumerate(dates):
             severity_scores = outputs[i]
-            raw_returns = raw_returns_dict.get(date_str)
-            if raw_returns is None:
-                global_idx = batch_idx * batch_size + i
-                if global_idx < len(dataset.anchor_returns):
-                    raw_returns = dataset.anchor_returns[global_idx]
-                else:
-                    raw_returns = np.zeros(4, dtype=np.float32)
+            raw_returns = None
+            if not is_infer:
+                raw_returns = raw_returns_dict.get(date_str)
+                if raw_returns is None:
+                    global_idx = batch_idx * batch_size + i
+                    if global_idx < len(dataset.anchor_returns):
+                        raw_returns = dataset.anchor_returns[global_idx]
+                    else:
+                        raw_returns = np.zeros(4, dtype=np.float32)
 
             severity = {
-                "h1": float(severity_scores[0]),
-                "h5": float(severity_scores[1]),
-                "h10": float(severity_scores[2]),
-                "h20": float(severity_scores[3]),
+                f"h{h}": float(severity_scores[i])
+                for i, h in enumerate(HORIZONS)
             }
-            severity_level = _build_severity_levels(raw_returns, q80, q90, q95)
             severity_level_pred = _build_severity_levels_from_values(severity_scores, q80, q90, q95)
+            severity_level = None
+            if raw_returns is not None:
+                severity_level = _build_severity_levels(raw_returns, q80, q90, q95)
 
-            if save_legacy:
+            if write_csv and (not latest_only or date_str == latest_date):
+                date_map = _next_trading_dates(date_str, HORIZONS, dataset.dates)
+                for h in HORIZONS:
+                    csv_rows.append(
+                        {
+                            "date": date_str,
+                            "window": str(window_size),
+                            "predict_date": date_map.get(h),
+                            "severity_level": severity_level_pred.get(f"h{h}", "normal"),
+                        }
+                    )
+
+            if write_json and save_legacy:
                 payload = {
                     "meta": {
                         "date": date_str,
@@ -350,21 +442,20 @@ def run_inference_cnn(
                     },
                     "scores": {
                         "severity": severity,
-                        "severity_level": severity_level,
                         "severity_level_pred": severity_level_pred,
-                        "raw_returns": {
-                            "h1": float(raw_returns[0]),
-                            "h5": float(raw_returns[1]),
-                            "h10": float(raw_returns[2]),
-                            "h20": float(raw_returns[3]),
-                        },
                     },
                 }
+                if severity_level is not None and raw_returns is not None:
+                    payload["scores"]["severity_level"] = severity_level
+                    payload["scores"]["raw_returns"] = {
+                        f"h{h}": float(raw_returns[i])
+                        for i, h in enumerate(HORIZONS)
+                    }
 
                 output_path = results_root / f"{date_str}.json"
                 output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
 
-            if save_unified:
+            if write_json and save_unified:
                 unified_payload = build_anomaly_payload(
                     model="cnn",
                     commodity=commodity,
@@ -388,7 +479,7 @@ def run_inference_cnn(
                 unified_path = unified_root / f"{date_str}.json"
                 write_json(unified_payload, unified_path)
 
-        if gradcam is not None:
+        if gradcam is not None and write_json:
             for i, date_str in enumerate(dates):
                 img_i = images[i : i + 1]
                 aux_i = aux[i : i + 1] if aux is not None else None
@@ -427,4 +518,11 @@ def run_inference_cnn(
     if gradcam_stats_fh is not None:
         gradcam_stats_fh.close()
 
-    return results_root
+    if write_csv:
+        pred_root.mkdir(parents=True, exist_ok=True)
+        csv_path = pred_root / "cnn_predictions.csv"
+        if csv_rows:
+            df = pd.DataFrame(csv_rows)
+            df = df.dropna(subset=["predict_date"]).reset_index(drop=True)
+            df.to_csv(csv_path, index=False)
+    return pred_root

@@ -188,7 +188,8 @@ def main(config: TrainConfig):
             seq_length=config.seq_length,
             horizons=config.horizons,
             batch_size=config.batch_size,
-            num_workers=config.num_workers
+            num_workers=config.num_workers,
+            seed=config.seed
         )
         
         data = pd.read_csv(price_path)

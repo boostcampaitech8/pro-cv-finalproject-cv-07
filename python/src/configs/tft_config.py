@@ -112,3 +112,4 @@ class TFTInferenceConfig:
     batch_size: int = 128
     num_workers: int = 4
     device: str = "cuda"
+    seed: int = 42

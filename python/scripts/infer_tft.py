@@ -38,6 +38,7 @@ def main(cfg: TFTInferenceConfig) -> None:
         batch_size=cfg.batch_size,
         num_workers=cfg.num_workers,
         device=cfg.device,
+        seed=cfg.seed,
         use_variable_selection=cfg.use_variable_selection,
         quantiles=cfg.quantiles,
         include_targets=cfg.include_targets,

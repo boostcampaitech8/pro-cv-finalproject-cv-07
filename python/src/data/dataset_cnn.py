@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate
 
 
-HORIZONS = [1, 5, 10, 20]
+HORIZONS = list(range(1, 21))
 # Volume-based auxiliary features are intentionally disabled.
 VOLUME_COLUMNS: List[str] = []
 IMAGE_MODE_TO_FOLDER = {
@@ -122,7 +122,7 @@ class CNNDataset(Dataset):
     CNN dataset for anomaly modeling with image, severity, and optional aux features.
     """
 
-    _severity_cache: Dict[Tuple[str, int, int], Dict[str, np.ndarray]] = {}
+    _severity_cache: Dict[Tuple[str, int, int, str, str], Dict[str, np.ndarray]] = {}
 
     def __init__(
         self,
@@ -133,9 +133,11 @@ class CNNDataset(Dataset):
         image_mode: str,
         use_aux: bool = False,
         aux_type: str = "news",
+        data_dir: Optional[str] = None,
+        split_file: Optional[str] = None,
     ) -> None:
-        if split not in {"train", "val"}:
-            raise ValueError("split must be 'train' or 'val'.")
+        if split not in {"train", "val", "test", "infer"}:
+            raise ValueError("split must be 'train', 'val', 'test', or 'infer'.")
         if image_mode not in {"candle", "gaf", "rp", "stack", "candle_gaf", "candle_rp"}:
             raise ValueError("image_mode must be 'candle', 'gaf', 'rp', 'stack', 'candle_gaf', or 'candle_rp'.")
         if aux_type != "news":
@@ -149,17 +151,36 @@ class CNNDataset(Dataset):
         self.use_aux = use_aux
         self.aux_type = aux_type
 
-        self.data_root = Path("src/datasets")
+        self.data_root = Path(data_dir) if data_dir else Path("src/datasets")
         self.preprocessing_root = self.data_root / "preprocessing"
         self.feature_path = self.preprocessing_root / f"{commodity}_feature_engineering.csv"
-        self.fold_path = self.data_root / "rolling_fold.json"
-        self.image_root = self.preprocessing_root / f"{commodity}_cnn_preprocessing"
+        if split_file:
+            split_path = Path(split_file)
+            if not split_path.exists() and not split_path.is_absolute():
+                split_path = self.data_root / split_path
+            self.fold_path = split_path
+        else:
+            if data_dir:
+                self.fold_path = self.data_root / f"{commodity}_split.json"
+            else:
+                self.fold_path = self.data_root / "rolling_fold.json"
+        local_candle_root = self.data_root / "candle_img"
+        if data_dir and local_candle_root.exists():
+            self.image_root = self.data_root
+            self.image_mode_to_folder = {
+                "candle": "candle_img",
+                "gaf": "gaf_img",
+                "rp": "rp_img",
+            }
+        else:
+            self.image_root = self.preprocessing_root / f"{commodity}_cnn_preprocessing"
+            self.image_mode_to_folder = IMAGE_MODE_TO_FOLDER
         self.news_path = self.data_root / "news_features.csv"
 
-        if not self.feature_path.exists():
-            raise FileNotFoundError(f"Feature CSV not found: {self.feature_path}")
-
-        self.df = pd.read_csv(self.feature_path)
+        if self.feature_path.exists():
+            self.df = pd.read_csv(self.feature_path)
+        else:
+            self.df = self._load_from_price_splits()
         required_columns = {"time", "open", "high", "low", "close"}
         missing = required_columns - set(self.df.columns)
         if missing:
@@ -175,15 +196,33 @@ class CNNDataset(Dataset):
         self.dates = self.df["date_str"].tolist()
         self.date_to_index = {date: idx for idx, date in enumerate(self.dates)}
 
-        close_prices = self.df["close"].to_numpy(dtype=np.float32)
-        self.log_returns = self._compute_log_returns(close_prices)
+        self.log_returns, self.uses_precomputed_returns = self._load_log_returns(self.df)
 
         fold_data = _load_fold_json(self.fold_path)
         self.fold_dates = self._get_fold_dates(fold_data)
-        self.anchor_indices = self._build_anchor_indices(self.fold_dates[self.split])
+        if self.split == "infer":
+            infer_dates = self._get_inference_dates(fold_data)
+            self.anchor_indices = self._build_anchor_indices(
+                infer_dates,
+                require_future=False,
+                require_returns=False,
+            )
+        elif self.split == "test":
+            test_dates = self._get_test_dates(fold_data)
+            self.anchor_indices = self._build_anchor_indices(
+                test_dates,
+                require_future=False,
+                require_returns=True,
+            )
+        else:
+            self.anchor_indices = self._build_anchor_indices(
+                self.fold_dates[self.split],
+                require_future=True,
+                require_returns=True,
+            )
         self.anchor_dates = [self.dates[idx] for idx in self.anchor_indices]
 
-        self.anchor_returns = self._collect_anchor_returns(self.anchor_indices)
+        self.anchor_returns = self._collect_anchor_returns(self.anchor_indices, fill_nan=True)
 
         self.q80, self.q90, self.q95 = self._get_severity_thresholds(fold_data)
 
@@ -193,6 +232,54 @@ class CNNDataset(Dataset):
             self.news_embeddings, self.news_dim = _load_news_features(self.news_path)
             if self.news_dim == 0:
                 self.news_dim = 512
+
+    def _load_from_price_splits(self) -> pd.DataFrame:
+        """
+        Fallback loader: build a full price dataframe from train/test/inference splits.
+        """
+        candidates = [
+            (self.data_root / "train_price.csv", "train"),
+            (self.data_root / "test_price.csv", "test"),
+            (self.data_root / "inference_price.csv", "inference"),
+        ]
+        frames: List[pd.DataFrame] = []
+        for path, source in candidates:
+            if not path.exists():
+                continue
+            df = pd.read_csv(path)
+            if "time" not in df.columns:
+                if "date" in df.columns:
+                    df = df.rename(columns={"date": "time"})
+                elif "trade_date" in df.columns:
+                    df = df.rename(columns={"trade_date": "time"})
+            df["_source"] = source
+            frames.append(df)
+
+        if not frames:
+            raise FileNotFoundError(
+                f"Feature CSV not found: {self.feature_path} and no price splits in {self.data_root}"
+            )
+
+        merged = pd.concat(frames, axis=0, ignore_index=True)
+        if "time" not in merged.columns:
+            raise ValueError("Expected 'time' column in price splits.")
+        merged["time"] = pd.to_datetime(merged["time"], errors="coerce")
+        merged = merged.dropna(subset=["time"]).sort_values("time")
+        if merged["time"].duplicated().any():
+            dup_dates = (
+                merged.loc[merged["time"].duplicated(keep=False), "time"]
+                .dt.strftime("%Y-%m-%d")
+                .unique()
+                .tolist()
+            )
+            sample = ", ".join(dup_dates[:10])
+            raise ValueError(
+                "Duplicate dates across price splits detected. "
+                f"Sample duplicates: {sample}. "
+                "Please ensure train/test/inference splits are non-overlapping."
+            )
+        merged = merged.drop(columns=["_source"], errors="ignore").reset_index(drop=True)
+        return merged
 
     def __len__(self) -> int:
         return len(self.anchor_indices)
@@ -217,7 +304,7 @@ class CNNDataset(Dataset):
             },
         }
 
-    def _compute_log_returns(self, close_prices: np.ndarray) -> Dict[int, np.ndarray]:
+    def _compute_log_returns_from_close(self, close_prices: np.ndarray) -> Dict[int, np.ndarray]:
         log_returns: Dict[int, np.ndarray] = {}
         log_prices = np.log(close_prices + 1e-12)
         for h in HORIZONS:
@@ -226,6 +313,25 @@ class CNNDataset(Dataset):
                 values[:-h] = np.abs(log_prices[h:] - log_prices[:-h])
             log_returns[h] = values
         return log_returns
+
+    def _load_log_returns(self, df: pd.DataFrame) -> Tuple[Dict[int, np.ndarray], bool]:
+        """
+        Prefer precomputed log_return_{h} columns if available; otherwise compute from close.
+        Returns (log_returns, uses_precomputed).
+        """
+        close_prices = df["close"].to_numpy(dtype=np.float32)
+        computed = self._compute_log_returns_from_close(close_prices)
+
+        log_returns: Dict[int, np.ndarray] = {}
+        uses_precomputed = False
+        for h in HORIZONS:
+            col = f"log_return_{h}"
+            if col in df.columns:
+                uses_precomputed = True
+                log_returns[h] = df[col].to_numpy(dtype=np.float32)
+            else:
+                log_returns[h] = computed[h]
+        return log_returns, uses_precomputed
 
     def _get_fold_dates(self, fold_data: Dict) -> Dict[str, List[str]]:
         folds = fold_data.get("folds", [])
@@ -248,7 +354,39 @@ class CNNDataset(Dataset):
 
         return dates
 
-    def _build_anchor_indices(self, split_dates: Sequence[str]) -> List[int]:
+    def _get_inference_dates(self, fold_data: Dict) -> List[str]:
+        meta = fold_data.get("meta", {})
+        inference_window = meta.get("inference_window", {})
+        start = inference_window.get("start")
+        end = inference_window.get("end")
+        if not start or not end:
+            raise ValueError("Missing inference_window in split meta for infer split.")
+        start_dt = pd.to_datetime(start)
+        end_dt = pd.to_datetime(end)
+        dates = [
+            d for d in self.dates if start_dt <= pd.to_datetime(d) <= end_dt
+        ]
+        if not dates:
+            raise ValueError("No dates found in inference window.")
+        return dates
+
+    def _get_test_dates(self, fold_data: Dict) -> List[str]:
+        meta = fold_data.get("meta", {})
+        fixed_test = meta.get("fixed_test", {})
+        t_dates = fixed_test.get("t_dates")
+        t_indices = fixed_test.get("t_indices")
+        if t_dates:
+            return [str(d) for d in t_dates]
+        if t_indices:
+            return [self.dates[idx] for idx in t_indices]
+        raise ValueError("Missing fixed_test t_dates/t_indices for test split.")
+
+    def _build_anchor_indices(
+        self,
+        split_dates: Sequence[str],
+        require_future: bool = True,
+        require_returns: bool = True,
+    ) -> List[int]:
         indices: List[int] = []
         max_horizon = max(HORIZONS)
         total = len(self.dates)
@@ -259,22 +397,40 @@ class CNNDataset(Dataset):
             idx = self.date_to_index[date_str]
             if idx < self.window_size - 1:
                 continue
-            if idx + max_horizon >= total:
+            if require_future and idx + max_horizon >= total:
                 continue
+            if require_returns:
+                valid = True
+                for h in HORIZONS:
+                    value = self.log_returns[h][idx]
+                    if not np.isfinite(value):
+                        valid = False
+                        break
+                if not valid:
+                    continue
             indices.append(idx)
 
         return indices
 
-    def _collect_anchor_returns(self, indices: Sequence[int]) -> np.ndarray:
+    def _collect_anchor_returns(self, indices: Sequence[int], fill_nan: bool = False) -> np.ndarray:
         if len(indices) == 0:
             return np.zeros((0, len(HORIZONS)), dtype=np.float32)
         stacked = [self.log_returns[h][indices] for h in HORIZONS]
-        return np.stack(stacked, axis=1).astype(np.float32)
+        out = np.stack(stacked, axis=1).astype(np.float32)
+        if fill_nan:
+            out = np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+        return out
 
     def _get_severity_thresholds(
         self, fold_data: Dict
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        cache_key = (self.commodity, self.fold, self.window_size)
+        cache_key = (
+            self.commodity,
+            self.fold,
+            self.window_size,
+            str(self.data_root.resolve()),
+            str(self.fold_path.resolve()),
+        )
         if cache_key in self._severity_cache:
             cached = self._severity_cache[cache_key]
             return cached["q80"], cached["q90"], cached["q95"]
@@ -322,7 +478,7 @@ class CNNDataset(Dataset):
         return torch.from_numpy(image.astype(np.float32))
 
     def _load_single_image(self, mode: str, date_str: str) -> np.ndarray:
-        folder = IMAGE_MODE_TO_FOLDER.get(mode)
+        folder = self.image_mode_to_folder.get(mode)
         if folder is None:
             raise ValueError(f"Unsupported image mode: {mode}")
         image_path = self.image_root / folder / f"w{self.window_size}" / f"{date_str}.png"

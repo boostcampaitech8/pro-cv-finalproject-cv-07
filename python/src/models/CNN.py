@@ -85,7 +85,7 @@ class CNN(nn.Module):
         Forward pass.
 
         Returns:
-            torch.Tensor: Severity scores [B, 4] for horizons [1, 5, 10, 20]
+            torch.Tensor: Severity scores [B, num_outputs] for configured horizons
                          Linear outputs (can be negative or > 1)
         """
         z_img = self.backbone(image)

@@ -119,12 +119,13 @@ def main(config: TrainConfig):
 
     print(f"[DEBUG] horizons = {config.horizons} → {h_tag}")
 
-    price_path = os.path.join(
+    train_price_path = os.path.join(config.data_dir, "train_price.csv")
+    feature_path = os.path.join(
         config.data_dir,
         f"preprocessing/{config.target_commodity}_feature_engineering.csv"
     )
     news_path = os.path.join(config.data_dir, "news_features.csv")
-    price_source = price_path
+    price_source = feature_path
     if config.data_source == "bigquery":
         price_source = load_price_table(
             project_id=config.bq_project_id,
@@ -132,6 +133,9 @@ def main(config: TrainConfig):
             table=config.bq_train_table,
             commodity=config.target_commodity,
         )
+    else:
+        if os.path.exists(train_price_path):
+            price_source = train_price_path
     split_file = config.split_file
     if "{commodity}" in split_file:
         split_file = split_file.format(commodity=config.target_commodity)
@@ -150,6 +154,7 @@ def main(config: TrainConfig):
         horizons=config.horizons,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
+        seed=config.seed,
     )
 
     print(f"✓ Total features: {data_loader.X.shape[-1]}")
@@ -305,46 +310,47 @@ def main(config: TrainConfig):
             print(f"✓ Saved val metrics: {metrics_path}")
 
         # --------------------
-        # Update global training summary (for view_summary.py)
+        # Update global training summary (optional)
         # --------------------
-        summary_path = Path(config.output_dir) / "training_summary.json"
-        if summary_path.exists():
-            with open(summary_path, "r") as f:
-                all_summaries = json.load(f)
-        else:
-            all_summaries = {}
+        if getattr(config, "save_training_summary", False):
+            summary_path = Path(config.output_dir) / "training_summary.json"
+            if summary_path.exists():
+                with open(summary_path, "r") as f:
+                    all_summaries = json.load(f)
+            else:
+                all_summaries = {}
 
-        commodity_key = config.target_commodity
-        all_summaries.setdefault(commodity_key, {})
+            commodity_key = config.target_commodity
+            all_summaries.setdefault(commodity_key, {})
 
-        fold_key = f"fold_{fold}"
-        entry = {
-            "best_epoch": int(best_epoch),
-            "best_valid_loss": float(best_val_loss),
-            "final_train_loss": float(train_hist[-1]),
-            "final_valid_loss": float(valid_hist[-1]),
-        }
-        if best_metrics is not None:
-            entry.update({k: float(v) for k, v in best_metrics.items()})
+            fold_key = f"fold_{fold}"
+            entry = {
+                "best_epoch": int(best_epoch),
+                "best_valid_loss": float(best_val_loss),
+                "final_train_loss": float(train_hist[-1]),
+                "final_valid_loss": float(valid_hist[-1]),
+            }
+            if best_metrics is not None:
+                entry.update({k: float(v) for k, v in best_metrics.items()})
 
-        all_summaries[commodity_key][fold_key] = entry
+            all_summaries[commodity_key][fold_key] = entry
 
-        # best_fold 갱신
-        best_fold = None
-        best_loss = float("inf")
-        for k, v in all_summaries[commodity_key].items():
-            if not k.startswith("fold_"):
-                continue
-            if v.get("best_valid_loss", float("inf")) < best_loss:
-                best_loss = v["best_valid_loss"]
-                best_fold = k
-        if best_fold is not None:
-            all_summaries[commodity_key]["best_fold"] = best_fold
+            # best_fold 갱신
+            best_fold = None
+            best_loss = float("inf")
+            for k, v in all_summaries[commodity_key].items():
+                if not k.startswith("fold_"):
+                    continue
+                if v.get("best_valid_loss", float("inf")) < best_loss:
+                    best_loss = v["best_valid_loss"]
+                    best_fold = k
+            if best_fold is not None:
+                all_summaries[commodity_key]["best_fold"] = best_fold
 
-        with open(summary_path, "w") as f:
-            json.dump(all_summaries, f, indent=2)
+            with open(summary_path, "w") as f:
+                json.dump(all_summaries, f, indent=2)
 
-        print(f"✓ Updated training summary: {summary_path}")
+            print(f"✓ Updated training summary: {summary_path}")
 
 
         if viz_dir is not None:
