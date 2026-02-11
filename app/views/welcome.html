@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>가입 완료 - 원자재 시세</title>
+    <style>
+        /* 기본 레이아웃 시스템 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: #f8f9fa;
+            height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* 웰컴 카드 디자인 */
+        .welcome-content {
+            text-align: center;
+            width: 100%;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        /* 큰 아이콘 애니메이션 */
+        .icon-large {
+            font-size: 64px;
+            margin-bottom: 24px;
+            display: inline-block;
+            animation: bounce 2s infinite;
+        }
+
+        h2 {
+            font-size: 28px;
+            font-weight: 800;
+            margin: 0 0 16px 0;
+            color: #1a1a1a;
+        }
+
+        .welcome-text {
+            color: #495057;
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 32px;
+        }
+
+        .welcome-text strong {
+            color: #5c9eff;
+            font-weight: 700;
+        }
+
+        /* 회원번호 배지 (홈 화면의 icon-circle 느낌 계승) */
+        .user-id-badge {
+            display: inline-block;
+            background-color: #fff;
+            padding: 8px 20px;
+            border-radius: 50px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #adb5bd;
+            border: 1px solid #e9ecef;
+            margin-bottom: 48px;
+        }
+
+        /* 버튼 스타일 (analysis-btn 및 submit-btn 계승) */
+        .main-btn {
+            display: block;
+            width: 100%;
+            max-width: 300px;
+            margin: 0 auto;
+            padding: 18px;
+            background-color: #5c9eff;
+            color: white;
+            text-decoration: none;
+            border-radius: 18px;
+            font-size: 17px;
+            font-weight: 700;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(92, 158, 255, 0.3);
+        }
+
+        .main-btn:active {
+            transform: scale(0.96);
+            box-shadow: 0 2px 6px rgba(92, 158, 255, 0.2);
+        }
+
+        /* 단순한 애니메이션 효과 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="welcome-content">
+            <div class="icon-large">✨</div>
+            
+            <h2>가입 완료!</h2>
+            
+            <p class="welcome-text">
+                <strong>{{ user.nickname }}</strong>님, 진심으로 환영합니다.<br>
+                이제 모든 서비스를 자유롭게 이용하실 수 있습니다.
+            </p>
+            
+            <div class="user-id-badge">회원번호 #{{ user.member_id }}</div>
+            
+            <a href="/" class="main-btn">시작하기</a>
+        </div>
+    </div>
+
+</body>
+</html>

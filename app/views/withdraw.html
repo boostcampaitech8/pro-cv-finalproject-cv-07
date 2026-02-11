@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>회원 탈퇴 인증 - 원자재 시세</title>
+    <style>
+        /* 기본 레이아웃 시스템 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: #f8f9fa;
+            height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* 상단 네비게이션 바 */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            height: 40px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .back-btn {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            cursor: pointer;
+            position: absolute;
+            left: 0;
+            z-index: 10;
+        }
+
+        .nav-title {
+            width: 100%;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        /* 중앙 컨텐츠 */
+        .withdraw-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding-bottom: 40px;
+        }
+
+        .icon-large {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+
+        h2 {
+            font-size: 24px;
+            font-weight: 800;
+            margin: 0 0 12px 0;
+            color: #1a1a1a;
+        }
+
+        p {
+            color: #868e96;
+            font-size: 15px;
+            line-height: 1.6;
+            margin: 0 0 40px 0;
+        }
+
+        /* 버튼 그룹 */
+        .btn-group {
+            width: 100%;
+            max-width: 360px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 16px;
+            border-radius: 16px;
+            font-size: 15px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            transition: transform 0.1s ease;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .google-btn {
+            background-color: white;
+            color: #3c4043;
+            border: 1px solid #dadce0;
+        }
+
+        .naver-btn {
+            background-color: #03c75a;
+            color: white;
+        }
+
+        .cancel-link {
+            margin-top: 24px;
+            color: #adb5bd;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="nav-bar">
+            <div class="back-btn" onclick="history.back()">〈</div>
+            <div class="nav-title">본인 확인</div>
+        </div>
+
+        <div class="withdraw-content">
+            <div class="icon-large">⚠️</div>
+            <h2>회원 탈퇴 본인 확인</h2>
+            <p>안전한 탈퇴를 위해 가입하신 소셜 계정으로<br>다시 한번 인증이 필요합니다.</p>
+            
+            <div class="btn-group">
+                {% for acc in social_accs %}
+                    {% set is_google = acc.provider_name == 'google' %}
+                    <button onclick="location.href='/withdraw/verify/{{ acc.provider_name }}'" 
+                            class="btn {{ 'google-btn' if is_google else 'naver-btn' }}">
+                        {% if is_google %}
+                            <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" style="width: 18px; margin-right: 12px;">
+                        {% else %}
+                            <span style="font-weight: 900; font-size: 1.1em; margin-right: 12px; font-family: 'Arial Black';">N</span>
+                        {% endif %}
+                        {{ acc.provider_name.capitalize() }} 계정으로 인증 후 탈퇴
+                    </button>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - 원자재 시세</title>
+    <style>
+        /* 기본 배경 및 중앙 정렬 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5; /* 약간 더 깊이감 있는 배경색 */
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center; /* 가로 중앙 정렬 */
+            min-height: 100vh;
+        }
+
+        /* 웹에서 모바일 뷰처럼 보이게 하는 컨테이너 */
+        .container {
+            width: 100%;
+            max-width: 480px; /* 전형적인 모바일 뷰 너비 */
+            background-color: #f8f9fa;
+            min-height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05); /* 웹 환경에서 경계선 구분 */
+        }
+
+        .header {
+            margin-bottom: 32px;
+            margin-top: 10px;
+        }
+        
+        .header p {
+            color: #888;
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 800;
+            margin: 4px 0 0 0;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 24px 0 16px 4px;
+            color: #1a1a1a;
+        }
+
+        .product-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* 카드 디자인 개선 */
+        .product-card {
+            background: white;
+            border-radius: 20px;
+            padding: 18px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            overflow: hidden; /* 확장될 때 내용이 넘치지 않게 */
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); /* 부드러운 확장 애니메이션 */
+            border: 1px solid transparent;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .product-card.active {
+            border-color: #e9ecef;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+        }
+
+        .left-content {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .icon-circle {
+            width: 52px;
+            height: 52px;
+            border-radius: 16px; /* 이모지 배경을 약간 각진 원형으로 */
+            background-color: #f1f3f5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .name-box .name-ko {
+            font-size: 16px;
+            font-weight: 700;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .name-box .name-en {
+            font-size: 12px;
+            color: #adb5bd;
+            font-weight: 500;
+        }
+
+        .right-content {
+            text-align: right;
+        }
+
+        .price {
+            font-size: 17px;
+            font-weight: 700;
+            display: block;
+            color: #212529;
+        }
+
+        .change-rate {
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 4px;
+            display: inline-block;
+        }
+
+        /* 상승/하락 색상 및 기호 강조 */
+        .positive { color: #2ecc71; }
+        .negative { color: #e74c3c; }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .profile-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: #dee2e6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .profile-btn img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .profile-btn i {
+            font-size: 20px;
+            color: #adb5bd;
+        }
+
+        .empty-fav {
+            background: #fff;
+            border-radius: 16px;
+            padding: 30px 20px;
+            text-align: center;
+            border: 2px dashed #dee2e6;
+            color: #868e96;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .empty-fav b { color: #495057; display: block; margin-bottom: 5px; }
+
+        /* 상단 영역 (항상 보임) */
+        .card-main {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* 확장 영역 (평소에는 숨김) */
+        .card-detail {
+            max-height: 0; /* 높이를 0으로 설정 */
+            opacity: 0;
+            transition: all 0.3s ease;
+            padding-top: 0;
+        }
+
+        /* active 클래스가 붙으면 확장 */
+        .product-card.active .card-detail {
+            max-height: 500px; /* 적당한 최대 높이 */
+            opacity: 1;
+            padding-top: 20px;
+            overflow: visible; /* 차트가 잘리지 않게 */
+        }
+
+        /* 차트 빈 칸 (사진 참고) */
+        .chart-box {
+            width: 100%;
+            height: 240px; /* 고정 높이 유지 */
+            background: #f8faff;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            position: relative; /* 중요: 차트가 이 안에 갇히게 함 */
+            border: 1px solid #edf2f7;
+            box-sizing: border-box;
+        }
+
+        /* 상세 분석 버튼 (파란색) */
+        .analysis-btn {
+            width: 100%;
+            padding: 14px;
+            background-color: #5c9eff;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .custom-badge {
+            position: absolute;
+            /* top 값은 JS에서 실시간으로 계산해서 넣어줄 것이므로 비워둡니다 */
+            background-color: #4A72D4;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: bold;
+            text-align: center;
+            line-height: 1.3;
+            transform: translate(-50%, 0); /* 가로 중심만 맞춤 */
+            z-index: 10;
+            display: none;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <div class="header-top">
+                <div>
+                    <p>안녕하세요, {{ user_name if is_logged_in else 'Guest' }}님!</p>
+                    <h1>Home</h1>
+                </div>
+                <div class="profile-btn" id="profileBtn" data-logged-in="{{ 'true' if is_logged_in else 'false' }}" onclick="goToProfile()">
+                    {% if is_logged_in and user_profile_img %}
+                        <img src="{{ user_profile_img }}" alt="Profile">
+                    {% else %}
+                        <span>👤</span> 
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        {% if is_logged_in %}
+            <h2 class="section-title">즐겨찾기</h2>
+        
+            {% if favorites %}
+                <div class="product-list" style="margin-bottom: 30px;">
+                    {% for item in favorites %}
+                    <div class="product-card" onclick="toggleCard(this)">
+                        <div class="card-main">
+                            <div class="left-content">
+                                <div class="icon-circle">{{ item.emoji }}</div>
+                                <div class="name-box">
+                                    <span class="name-ko">{{ item.name_ko }}</span>
+                                    <span class="name-en">{{ item.ticker }}</span>
+                                </div>
+                            </div>
+                            <div class="right-content">
+                                <span class="price">{{ item.price }}</span>
+                                <span class="change-rate {{ 'positive' if item.is_positive else 'negative' }}">
+                                    {{ item.change_rate }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="card-detail">
+                            <div class="chart-box" style="padding: 10px; height: 240px; position: relative;">
+                                <canvas class="product-chart" data-item-id="{{ item.id }}" width="100%" height="40"></canvas>
+
+                                <div class="label-start custom-badge">10일 전<br>2026.01.23</div>
+                                <div class="label-end custom-badge">현재<br>2026.01.23</div>
+                                <div class="label-combined custom-badge">10일 전 ~ 현재<br>2026.01.23</div>
+                            </div>
+                            <button class="analysis-btn" onclick="handleAnalysisClick(event, '{{ item.id }}')">
+                                상세 분석
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-fav">
+                    <b>등록된 즐겨찾기가 없어요.</b>
+                    전체 종목에서 관심 있는 작물을 추가해 보세요!
+                </div>
+            {% endif %}
+        {% endif %}
+
+        <h2 class="section-title">전체 종목</h2>
+        
+        <div class="product-list">
+            {% for item in all_products %}
+            <div class="product-card" onclick="toggleCard(this)">
+                <div class="card-main">
+                    <div class="left-content">
+                        <div class="icon-circle">{{ item.emoji }}</div>
+                        <div class="name-box">
+                            <span class="name-ko">{{ item.name_ko }}</span>
+                            <span class="name-en">{{ item.ticker }}</span>
+                        </div>
+                    </div>
+                    <div class="right-content">
+                        <span class="price">{{ item.price }}</span>
+                        <span class="change-rate {{ 'positive' if item.is_positive else 'negative' }}">
+                            {{ item.change_rate }}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="card-detail">
+                    <div class="chart-box" style="padding: 10px; height: 240px; position: relative;">
+                        <canvas class="product-chart" data-item-id="{{ item.id }}" width="100%" height="40"></canvas>
+
+                        <div class="label-start custom-badge"></div>
+                        <div class="label-end custom-badge"></div>
+                        <div class="label-combined custom-badge"></div>
+                    </div>
+                    <button class="analysis-btn" onclick="handleAnalysisClick(event, '{{ item.id }}')">
+                        상세 분석
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+
+    <script>
+        // 1. 프로필 이동 (변경 없음)
+        function goToProfile() {
+            const btn = document.getElementById('profileBtn');
+            const isLoggedIn = btn.getAttribute('data-logged-in') === 'true';
+            window.location.href = isLoggedIn ? "/profile" : "/login";
+        }
+
+        // 2. 카드 토글 및 차트 로드 (중복 제거 및 통합)
+        function toggleCard(element) {
+            const isActive = element.classList.toggle('active');
+
+            if (isActive) {
+                const canvas = element.querySelector('.product-chart');
+                const productId = canvas.getAttribute('data-item-id');
+                // 20과 canvas를 함께 넘겨줍니다.
+                loadPredictChart(productId, 20, canvas);
+            }
+        }
+
+        // 3. 상세 분석 클릭 (기존 로직 유지)
+        function handleAnalysisClick(event, id) {
+            event.stopPropagation();
+            const btn = document.getElementById('profileBtn');
+            const isLoggedIn = btn.getAttribute('data-logged-in') === 'true';
+            if (!isLoggedIn) {
+                window.location.href = "/login";
+            } else {
+                window.location.href = `/product/${id}`;
+            }
+        }
+
+        // 4. 차트 로드 함수 (인자 추가: targetCanvas)
+        async function loadPredictChart(productId, windowSize, targetCanvas) {
+            try {
+                const response = await fetch(`/api/prediction/${productId}?window_size=${windowSize}`);
+                if (!response.ok) return;
+
+                const result = await response.json();
+                const data = result.data; 
+                const baseDate = result.base_date;
+                const labels = data.map(item => item.date);
+                const prices = data.map(item => item.close);
+
+                const validPrices = prices.filter(p => p !== null && p !== undefined);
+                const minP = Math.min(...validPrices);
+                const maxP = Math.max(...validPrices);
+                const range = maxP - minP;
+
+                const totalLen = prices.length;
+                const predictLen = 20; 
+                const winSizeInt = parseInt(windowSize); 
+                const splitIdx = totalLen - predictLen - 1; 
+
+                const actualData = prices.map((v, i) => i <= splitIdx ? v : null);
+                const predictData = prices.map((v, i) => i >= splitIdx ? v : null);
+
+                // [수정] querySelector 대신 인자로 받은 targetCanvas 사용
+                const ctx = targetCanvas.getContext('2d');
+
+                // [수정] 해당 캔버스에 이미 차트가 있다면 파괴 (메모리 관리)
+                if (targetCanvas.chart) { 
+                    targetCanvas.chart.destroy(); 
+                }
+
+                // [수정] 차트 객체를 캔버스 속성에 저장
+                targetCanvas.chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: '실제 종가',
+                                data: actualData,
+                                borderColor: '#5c9eff',
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 5,
+                                tension: 0.3,
+                                fill: false
+                            },
+                            {
+                                label: '예측 종가',
+                                data: predictData,
+                                borderColor: '#FFD700',
+                                borderWidth: 3,
+                                borderDash: [5, 5],
+                                pointRadius: 0,
+                                pointHoverRadius: 5,
+                                tension: 0.3,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { intersect: false, mode: 'index' },
+                        layout: { padding: { bottom: 40, top: 10 } },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                enabled: true,
+                                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                                titleColor: '#333',
+                                bodyColor: '#333',
+                                borderColor: '#ddd',
+                                borderWidth: 1,
+                                filter: function(tooltipItem) {
+                                    return !(tooltipItem.dataIndex === splitIdx && tooltipItem.datasetIndex === 1);
+                                },
+                                callbacks: {
+                                    label: (context) => `${context.dataset.label}: ${context.parsed.y.toLocaleString()}원`
+                                }
+                            },
+                            annotation: {
+                                annotations: {
+                                    windowBox: {
+                                        type: 'box',
+                                        xMin: Math.max(0, splitIdx - winSizeInt + 1),
+                                        xMax: splitIdx,
+                                        backgroundColor: 'rgba(92, 158, 255, 0.15)',
+                                        borderColor: 'transparent',
+                                        drawTime: 'beforeDatasetsDraw'
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { 
+                                display: true, 
+                                grid: { display: false },
+                                border: { color: '#ddd', width: 1 },
+                                ticks: { display: false }
+                            },
+                            y: { 
+                                position: 'right',
+                                min: minP - (range * 0.1), 
+                                max: maxP + (range * 0.1),
+                                grid: { display: false },
+                                ticks: { display: false },
+                                border: { display: false }
+                            }
+                        },
+                        animation: {
+                            onProgress: (anim) => updateLabels(anim.chart, splitIdx, totalLen - 1, baseDate, windowSize, labels),
+                            onComplete: (anim) => updateLabels(anim.chart, splitIdx, totalLen - 1, baseDate, windowSize, labels)
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("데이터 로드 중 오류:", error);
+            }
+        }
+
+        // 5. 라벨 업데이트 함수 (기존 유지)
+        function updateLabels(chart, splitIdx, totalLen, baseDate, windowSize, labels) {
+            const xAxis = chart.scales.x;
+            const { bottom } = chart.chartArea;
+            const parent = chart.canvas.parentElement;
+            
+            const labelStart = parent.querySelector('.label-start');
+            const labelEnd = parent.querySelector('.label-end');
+            const labelCombined = parent.querySelector('.label-combined');
+
+            if (!labelStart || !labelEnd || !labelCombined) return;
+
+            const winSizeInt = parseInt(windowSize);
+            const boxStartIdx = Math.max(0, splitIdx - winSizeInt + 1);
+            const xPosStart = xAxis.getPixelForValue(boxStartIdx);
+            const xPosEnd = xAxis.getPixelForValue(splitIdx);
+            const distance = Math.abs(xPosEnd - xPosStart);
+
+            if (distance < 100) {
+                labelStart.style.display = 'none';
+                labelEnd.style.display = 'none';
+                labelCombined.style.display = 'block';
+                labelCombined.innerHTML = `${windowSize}일 학습 데이터<br>${baseDate}`; 
+                labelCombined.style.left = ((xPosStart + xPosEnd) / 2 + 12) + 'px';
+                labelCombined.style.top = (bottom + 15) + 'px';
+            } else {
+                labelCombined.style.display = 'none';
+                labelStart.style.display = 'block';
+                labelStart.innerHTML = `학습 시작<br>${labels[boxStartIdx] || ''}`;
+                labelStart.style.left = (xPosStart + 12) + 'px';
+                labelStart.style.top = (bottom + 15) + 'px';
+
+                labelEnd.style.display = 'block';
+                labelEnd.innerHTML = `학습 종료<br>${baseDate}`;
+                labelEnd.style.left = (xPosEnd + 12) + 'px';
+                labelEnd.style.top = (bottom + 15) + 'px';
+            }
+        }
+
+        // 6. 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            Chart.register(window['chartjs-plugin-annotation']);
+        });
+    </script>
+</body>
+</html>
