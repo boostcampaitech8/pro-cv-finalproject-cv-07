@@ -20,6 +20,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.configs.train_config import TrainConfig
 from src.utils.set_seed import set_seed
 from src.data.dataset_tft import TFTDataLoader
+from src.data.bigquery_loader import load_price_table, load_news_features_bq
 from src.models.TFT import TemporalFusionTransformer
 from src.data.postprocessing import convert_close
 
@@ -170,6 +171,7 @@ def main(config: TrainConfig):
         
         price_path = os.path.join(config.data_dir, price_file)
         news_path = os.path.join(config.data_dir, news_file)
+        news_source = news_path
         split_file = config.split_file
         if "{commodity}" in split_file:
             split_file = split_file.format(commodity=commodity)
@@ -177,13 +179,29 @@ def main(config: TrainConfig):
         if not split_path.is_absolute():
             split_path = Path(config.data_dir) / split_file
         
-        if not os.path.exists(price_path):
-            print(f"{price_path} 파일 존재하지 않음")
-            return
+        price_source = price_path
+        if config.data_source == "bigquery":
+            price_source = load_price_table(
+                project_id=config.bq_project_id,
+                dataset_id=config.bq_dataset_id,
+                table=config.bq_train_table,
+                commodity=commodity,
+            )
+        else:
+            if not os.path.exists(price_path):
+                print(f"{price_path} 파일 존재하지 않음")
+                return
+        if getattr(config, "news_source", "csv") == "bigquery":
+            news_source = load_news_features_bq(
+                project_id=config.bq_news_project_id,
+                dataset_id=config.bq_news_dataset_id,
+                table=config.bq_news_table,
+                commodity=commodity,
+            )
         
         data_loader = TFTDataLoader(
-            price_data_path=price_path,
-            news_data_path=news_path,
+            price_data_path=price_source,
+            news_data_path=news_source,
             split_file=str(split_path),
             seq_length=config.seq_length,
             horizons=config.horizons,
@@ -192,7 +210,10 @@ def main(config: TrainConfig):
             seed=config.seed
         )
         
-        data = pd.read_csv(price_path)
+        if isinstance(price_source, pd.DataFrame):
+            data = price_source.copy()
+        else:
+            data = pd.read_csv(price_path)
         
         all_preds = []
         all_trues = []

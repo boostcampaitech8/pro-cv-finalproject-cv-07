@@ -7,6 +7,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.engine.inference_cnn import run_inference_cnn
+from src.data.bigquery_loader import load_news_features_bq
 
 
 def _infer_date_tag(split_path: Path) -> str:
@@ -107,6 +108,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also write per-date JSON outputs (default: off).",
     )
+    parser.add_argument(
+        "--news_source",
+        choices=["csv", "bigquery"],
+        default="bigquery",
+        help="News feature source (default: bigquery).",
+    )
+    parser.add_argument("--bq_news_project_id", type=str, default="gcp-practice-484218")
+    parser.add_argument("--bq_news_dataset_id", type=str, default="news_data")
+    parser.add_argument("--bq_news_table", type=str, default="daily_summary")
 
     return parser.parse_args()
 
@@ -136,6 +146,15 @@ def main() -> None:
             / "best_model.pt"
         )
 
+    news_df = None
+    if args.use_aux and args.aux_type == "news" and args.news_source == "bigquery":
+        news_df = load_news_features_bq(
+            project_id=args.bq_news_project_id,
+            dataset_id=args.bq_news_dataset_id,
+            table=args.bq_news_table,
+            commodity=args.commodity,
+        )
+
     results_root = run_inference_cnn(
         commodity=args.commodity,
         fold=args.fold,
@@ -160,6 +179,7 @@ def main() -> None:
         date_tag=date_tag,
         latest_only=not args.all_dates,
         write_json=args.write_json,
+        news_data=news_df,
     )
 
     print(f"Inference JSON saved to: {results_root}")

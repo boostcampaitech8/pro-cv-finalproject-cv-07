@@ -26,6 +26,10 @@ import pandas as pd
 import numpy as np
 from pandas.tseries.offsets import BDay
 import json
+import warnings
+
+# Suppress noisy runtime warnings in batch runs
+warnings.filterwarnings("ignore")
 import sys
 import os
 import warnings
@@ -64,6 +68,10 @@ class BatchConfig:
     bq_dataset_id: str = "final_proj"
     bq_train_table: str = "train_price"
     bq_inference_table: str = "inference_price"
+    news_source: str = "bigquery"  # csv or bigquery
+    bq_news_project_id: str = "gcp-practice-484218"
+    bq_news_dataset_id: str = "news_data"
+    bq_news_table: str = "daily_summary"
     future_price_file: str = "src/datasets/{commodity}_future_price.csv"
     eval_last_only: bool = True
 
@@ -133,6 +141,10 @@ def _build_train_config(cfg: BatchConfig, seq_length: int, checkpoint_dir: Path)
         bq_dataset_id=cfg.bq_dataset_id,
         bq_train_table=cfg.bq_train_table,
         bq_inference_table=cfg.bq_inference_table,
+        news_source=cfg.news_source,
+        bq_news_project_id=cfg.bq_news_project_id,
+        bq_news_dataset_id=cfg.bq_news_dataset_id,
+        bq_news_table=cfg.bq_news_table,
         checkpoint_dir=str(checkpoint_dir),
         checkpoint_layout=cfg.checkpoint_layout,
         compute_feature_importance=cfg.save_train_interpretations,
@@ -274,10 +286,74 @@ def _build_trading_calendar(inference_path: Path, future_path: Path) -> List[str
     return sorted(set(dates))
 
 
+def _resolve_exchange_for_commodity(commodity: Optional[str]) -> str:
+    if not commodity:
+        return "NYSE"
+    key = str(commodity).strip()
+    mapping = {
+        "corn": "CBOT",
+        "wheat": "CBOT",
+        "soybean": "CBOT",
+        "gold": "COMEX",
+        "silver": "COMEX",
+        "copper": "COMEX",
+        "ZC=F": "CBOT",
+        "ZW=F": "CBOT",
+        "ZS=F": "CBOT",
+        "GC=F": "COMEX",
+        "SI=F": "COMEX",
+        "HG=F": "COMEX",
+    }
+    if key in mapping:
+        return mapping[key]
+    lower = key.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return "NYSE"
+
+
+def _exchange_future_dates(
+    as_of: str,
+    horizons: List[int],
+    exchange: str = "NYSE",
+) -> Dict[int, str]:
+    if not horizons:
+        return {}
+    try:
+        import pandas_market_calendars as mcal
+    except Exception:
+        return {}
+    try:
+        calendar = mcal.get_calendar(exchange)
+    except Exception:
+        return {}
+
+    base = pd.to_datetime(as_of, errors="coerce")
+    if pd.isna(base):
+        return {}
+    max_h = max(int(h) for h in horizons)
+    if max_h <= 0:
+        return {}
+    start = base + pd.Timedelta(days=1)
+    end = base + pd.Timedelta(days=max_h * 5 + 7)
+    try:
+        valid_days = calendar.valid_days(start_date=start, end_date=end)
+    except Exception:
+        return {}
+    day_list = [d.date().isoformat() for d in valid_days]
+    mapping: Dict[int, str] = {}
+    for h in horizons:
+        idx = int(h) - 1
+        if 0 <= idx < len(day_list):
+            mapping[int(h)] = day_list[idx]
+    return mapping
+
+
 def _next_trading_dates(
     as_of: str,
     horizons: List[int],
     trading_calendar: List[str],
+    exchange: str = "NYSE",
 ) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     if trading_calendar and as_of in trading_calendar:
@@ -286,6 +362,9 @@ def _next_trading_dates(
         for h in horizons:
             if h - 1 < len(future):
                 mapping[h] = future[h - 1]
+    missing = [int(h) for h in horizons if int(h) not in mapping]
+    if missing:
+        mapping.update(_exchange_future_dates(as_of, missing, exchange=exchange))
     # fallback (or fill gaps): business days (skips weekends, not exchange holidays)
     base = pd.to_datetime(as_of)
     for h in horizons:
@@ -371,6 +450,10 @@ def main(cfg: BatchConfig) -> None:
                 bq_dataset_id=cfg.bq_dataset_id,
                 bq_train_table=cfg.bq_train_table,
                 bq_inference_table=cfg.bq_inference_table,
+                news_source=cfg.news_source,
+                bq_news_project_id=cfg.bq_news_project_id,
+                bq_news_dataset_id=cfg.bq_news_dataset_id,
+                bq_news_table=cfg.bq_news_table,
                 split="inference",
                 batch_size=cfg.batch_size,
                 num_workers=cfg.num_workers,
@@ -477,7 +560,12 @@ def main(cfg: BatchConfig) -> None:
             if base_close is None or not np.isfinite(base_close):
                 continue
             pred_close = float(base_close * np.exp(float(pred_lr)))
-            date_map = _next_trading_dates(as_of, [horizon], trading_calendar)
+            date_map = _next_trading_dates(
+                as_of,
+                [horizon],
+                trading_calendar,
+                exchange=_resolve_exchange_for_commodity(cfg.target_commodity),
+            )
             predict_date = date_map.get(horizon)
             if predict_date is None:
                 continue

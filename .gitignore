@@ -25,3 +25,11 @@ airflow/airflow.db
 airflow/logs/
 airflow/logs/**
 airflow/*.json
+airflow/*.pid
+
+# Local env files
+.env
+**/.env
+
+# Service account keys (local)
+python/esoteric-buffer-485608-g5-5480b2b27a64.json

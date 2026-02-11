@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.dataset_cnn import CNNDataset, cnn_collate_fn
+from src.data.bigquery_loader import load_news_features_bq
 from src.engine.trainer_cnn import evaluate_cnn
 from src.metrics.metrics_cnn import HORIZONS, summarize_metrics
 from src.models.CNN import CNN
@@ -40,6 +41,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_dir", type=str, default="")
     parser.add_argument("--split_file", type=str, default="")
     parser.add_argument("--metrics_path", type=str, default="")
+    parser.add_argument(
+        "--news_source",
+        choices=["csv", "bigquery"],
+        default="bigquery",
+        help="News feature source (default: bigquery).",
+    )
+    parser.add_argument("--bq_news_project_id", type=str, default="gcp-practice-484218")
+    parser.add_argument("--bq_news_dataset_id", type=str, default="news_data")
+    parser.add_argument("--bq_news_table", type=str, default="daily_summary")
 
     return parser.parse_args()
 
@@ -48,6 +58,15 @@ def main() -> None:
     args = parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    news_df = None
+    if args.use_aux and args.aux_type == "news" and args.news_source == "bigquery":
+        news_df = load_news_features_bq(
+            project_id=args.bq_news_project_id,
+            dataset_id=args.bq_news_dataset_id,
+            table=args.bq_news_table,
+            commodity=args.target_commodity,
+        )
 
     val_ds = CNNDataset(
         commodity=args.target_commodity,
@@ -59,6 +78,7 @@ def main() -> None:
         aux_type=args.aux_type,
         data_dir=args.data_dir or None,
         split_file=args.split_file or None,
+        news_data=news_df,
     )
 
     val_loader = DataLoader(

@@ -5,6 +5,8 @@ import random
 import torch
 from torch.utils.data import Dataset
 from typing import List, Tuple, Dict, Optional
+from bisect import bisect_right
+from pandas.api.types import is_numeric_dtype
 
 
 def _seed_worker(worker_id: int) -> None:
@@ -95,74 +97,91 @@ def align_news_to_trading_dates_runtime(
     
     trading_dates_set = set(trading_dates)
     
-    # 뉴스를 날짜별 딕셔너리로 변환
+    # 뉴스를 날짜별 딕셔너리로 변환 (휴장일/주말은 직전 거래일로 보정)
     news_df_copy = news_df.copy()
-    news_df_copy['date'] = pd.to_datetime(news_df_copy['date']).dt.date
-    
-    news_by_date = {}
-    news_emb_cols = [col for col in news_df.columns if col.startswith('news_emb_')]
-    
-    for _, row in news_df_copy.iterrows():
-        news_date = row['date']
-        news_by_date[news_date] = {
-            'count': row['news_count'],
-            'embeddings': row[news_emb_cols].values
-        }
-    
-    all_news_dates = sorted(news_by_date.keys())
-    
-    # 거래일별로 뉴스 재배치
-    accumulated_news = {}
-    
-    for news_date in all_news_dates:
-        if news_date in trading_dates_set:
-            # 거래일인 경우
-            if news_date not in accumulated_news:
-                accumulated_news[news_date] = {
-                    'counts': [],
-                    'embeddings': []
-                }
-            accumulated_news[news_date]['counts'].append(news_by_date[news_date]['count'])
-            accumulated_news[news_date]['embeddings'].append(news_by_date[news_date]['embeddings'])
+    date_col = 'collect_date' if 'collect_date' in news_df_copy.columns else 'date'
+    if date_col not in news_df_copy.columns:
+        raise ValueError("뉴스 데이터에 날짜 컬럼(collect_date 또는 date)이 없습니다")
+
+    # BQ 뉴스 스키마: news_embedding_mean (REPEATED) -> news_emb_* 컬럼으로 확장
+    if "news_embedding_mean" in news_df_copy.columns and not any(
+        c.startswith("news_emb_") for c in news_df_copy.columns
+    ):
+        emb_series = news_df_copy["news_embedding_mean"].dropna()
+        if len(emb_series) > 0:
+            first = emb_series.iloc[0]
+            try:
+                emb_len = len(first)
+            except TypeError:
+                emb_len = 512
         else:
-            # 휴장일인 경우 - 이전 거래일 찾기
-            prev_trading_date = None
-            for td in reversed(trading_dates):
-                if td < news_date:
-                    prev_trading_date = td
-                    break
-            
-            if prev_trading_date is not None:
-                if prev_trading_date not in accumulated_news:
-                    accumulated_news[prev_trading_date] = {
-                        'counts': [],
-                        'embeddings': []
-                    }
-                accumulated_news[prev_trading_date]['counts'].append(news_by_date[news_date]['count'])
-                accumulated_news[prev_trading_date]['embeddings'].append(news_by_date[news_date]['embeddings'])
+            emb_len = 512
+
+        emb_cols = [f"news_emb_{i}" for i in range(emb_len)]
+
+        if len(news_df_copy) > 0:
+            def _normalize_emb(x):
+                if isinstance(x, (list, tuple, np.ndarray)):
+                    if len(x) == emb_len:
+                        return list(x)
+                    if len(x) > emb_len:
+                        return list(x)[:emb_len]
+                    return list(x) + [0.0] * (emb_len - len(x))
+                return [0.0] * emb_len
+
+            emb_df = pd.DataFrame(
+                news_df_copy["news_embedding_mean"].apply(_normalize_emb).tolist(),
+                columns=emb_cols
+            )
+        else:
+            emb_df = pd.DataFrame(columns=emb_cols)
+
+        news_df_copy = news_df_copy.drop(columns=["news_embedding_mean"]).reset_index(drop=True)
+        news_df_copy = pd.concat([news_df_copy, emb_df], axis=1)
+
+    news_df_copy['date'] = pd.to_datetime(news_df_copy[date_col]).dt.date
+
+    def _prev_trading_day(d: pd.Timestamp | None) -> pd.Timestamp | None:
+        if d is None or pd.isna(d):
+            return None
+        if d in trading_dates_set:
+            return d
+        idx = bisect_right(trading_dates, d) - 1
+        if idx < 0:
+            return None
+        return trading_dates[idx]
+
+    news_df_copy['date'] = news_df_copy['date'].apply(_prev_trading_day)
+    news_df_copy = news_df_copy[news_df_copy['date'].notna()]
     
-    # 누적된 뉴스를 평균내기
-    final_news = []
-    for trade_date, data in accumulated_news.items():
-        combined_count = sum(data['counts'])
-        # Embedding mean pooling
-        combined_embedding = np.mean(data['embeddings'], axis=0)
-        
-        row_data = {
-            'date': pd.Timestamp(trade_date),
-            'news_count': combined_count
-        }
-        # news_emb_* 컬럼 추가
-        for i, emb_val in enumerate(combined_embedding):
-            row_data[f'news_emb_{i}'] = emb_val
-        
-        final_news.append(row_data)
-    
-    final_news_df = pd.DataFrame(final_news)
+    news_emb_cols = [col for col in news_df_copy.columns if col.startswith('news_emb_')]
+    stat_cols = [
+        c for c in news_df_copy.columns
+        if c not in {date_col, "date", "news_count"}
+        and not c.startswith("news_emb_")
+    ]
+    # Keep only numeric stats
+    stat_cols = [c for c in stat_cols if is_numeric_dtype(news_df_copy[c])]
+    for col in stat_cols:
+        news_df_copy[col] = pd.to_numeric(news_df_copy[col], errors="coerce")
+
+    if "news_count" not in news_df_copy.columns:
+        news_df_copy["news_count"] = 0
+
+    agg = {"news_count": "sum"}
+    for col in news_emb_cols:
+        agg[col] = "mean"
+    for col in stat_cols:
+        agg[col] = "mean"
+
+    grouped = news_df_copy.groupby("date", as_index=False).agg(agg)
+    grouped["date"] = pd.to_datetime(grouped["date"], errors="coerce")
+    grouped = grouped.dropna(subset=["date"])
+
+    final_news_df = grouped.copy()
     if final_news_df.empty:
-        # No news matched to trading dates: create empty frame with expected columns
-        base_cols = ['date', 'news_count']
-        final_news_df = pd.DataFrame(columns=base_cols + news_emb_cols)
+        base_cols = ["date", "news_count"]
+        final_news_df = pd.DataFrame(columns=base_cols + stat_cols + news_emb_cols)
     
     # 모든 거래일에 대해 뉴스 데이터 생성
     all_trading_dates_df = pd.DataFrame({'date': [pd.Timestamp(d) for d in trading_dates]})
@@ -176,8 +195,11 @@ def align_news_to_trading_dates_runtime(
     # 뉴스가 없는 날 처리
     result_df['news_count'] = result_df['news_count'].fillna(0).astype(int)
     
-    # news_emb 컬럼들을 0으로 채우기
+    # news_emb/통계 컬럼들을 0으로 채우기
     for col in news_emb_cols:
+        if col in result_df.columns:
+            result_df[col] = result_df[col].fillna(0)
+    for col in stat_cols:
         if col in result_df.columns:
             result_df[col] = result_df[col].fillna(0)
     
@@ -463,6 +485,8 @@ class TFTDataLoader:
             self.X, self.Y, self.T, self.split_file, fold_index
         )
         scaler = {}
+        # Save feature names so inference can match training feature order/count.
+        scaler["feature_names"] = np.array(self.feature_names, dtype=object)
 
         if scale_x:
             # news_emb_* 는 스케일링 제외

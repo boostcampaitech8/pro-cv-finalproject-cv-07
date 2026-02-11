@@ -194,10 +194,74 @@ def _infer_date_tag(split_path: Optional[Path]) -> str:
     return "latest"
 
 
+def _resolve_exchange_for_commodity(commodity: Optional[str]) -> str:
+    if not commodity:
+        return "NYSE"
+    key = str(commodity).strip()
+    mapping = {
+        "corn": "CBOT",
+        "wheat": "CBOT",
+        "soybean": "CBOT",
+        "gold": "COMEX",
+        "silver": "COMEX",
+        "copper": "COMEX",
+        "ZC=F": "CBOT",
+        "ZW=F": "CBOT",
+        "ZS=F": "CBOT",
+        "GC=F": "COMEX",
+        "SI=F": "COMEX",
+        "HG=F": "COMEX",
+    }
+    if key in mapping:
+        return mapping[key]
+    lower = key.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return "NYSE"
+
+
+def _exchange_future_dates(
+    as_of: str,
+    horizons: Sequence[int],
+    exchange: str = "NYSE",
+) -> Dict[int, str]:
+    if not horizons:
+        return {}
+    try:
+        import pandas_market_calendars as mcal
+    except Exception:
+        return {}
+    try:
+        calendar = mcal.get_calendar(exchange)
+    except Exception:
+        return {}
+
+    base = pd.to_datetime(as_of, errors="coerce")
+    if pd.isna(base):
+        return {}
+    max_h = max(int(h) for h in horizons)
+    if max_h <= 0:
+        return {}
+    start = base + pd.Timedelta(days=1)
+    end = base + pd.Timedelta(days=max_h * 5 + 7)
+    try:
+        valid_days = calendar.valid_days(start_date=start, end_date=end)
+    except Exception:
+        return {}
+    day_list = [d.date().isoformat() for d in valid_days]
+    mapping: Dict[int, str] = {}
+    for h in horizons:
+        idx = int(h) - 1
+        if 0 <= idx < len(day_list):
+            mapping[int(h)] = day_list[idx]
+    return mapping
+
+
 def _next_trading_dates(
     as_of: str,
     horizons: Sequence[int],
     trading_dates: Sequence[str],
+    exchange: str = "NYSE",
 ) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     if as_of in trading_dates:
@@ -206,6 +270,9 @@ def _next_trading_dates(
         for h in horizons:
             if h - 1 < len(future):
                 mapping[h] = future[h - 1]
+    missing = [int(h) for h in horizons if int(h) not in mapping]
+    if missing:
+        mapping.update(_exchange_future_dates(as_of, missing, exchange=exchange))
     base = pd.to_datetime(as_of)
     for h in horizons:
         if h not in mapping:
@@ -240,6 +307,16 @@ def run_inference_cnn(
     latest_only: bool = True,
     write_json: bool = False,
     write_csv: bool = True,
+    news_data: Optional[pd.DataFrame] = None,
+    data_source: str = "local",
+    bq_project_id: Optional[str] = None,
+    bq_dataset_id: Optional[str] = None,
+    bq_train_table: str = "train_price",
+    bq_inference_table: str = "inference_price",
+    bq_test_table: str = "test_price",
+    image_source: str = "local",
+    gcs_bucket: Optional[str] = None,
+    gcs_prefix_template: str = "{symbol}/window_{window}_ohlc",
 ) -> Path:
     """
     Run inference on the requested split and save per-date JSON outputs.
@@ -266,6 +343,16 @@ def run_inference_cnn(
         aux_type=aux_type,
         data_dir=str(data_root) if data_root else None,
         split_file=str(split_path) if split_path else None,
+        news_data=news_data,
+        data_source=data_source,
+        bq_project_id=bq_project_id,
+        bq_dataset_id=bq_dataset_id,
+        bq_train_table=bq_train_table,
+        bq_inference_table=bq_inference_table,
+        bq_test_table=bq_test_table,
+        image_source=image_source,
+        gcs_bucket=gcs_bucket,
+        gcs_prefix_template=gcs_prefix_template,
     )
 
     dataloader = DataLoader(
@@ -422,7 +509,12 @@ def run_inference_cnn(
                 severity_level = _build_severity_levels(raw_returns, q80, q90, q95)
 
             if write_csv and (not latest_only or date_str == latest_date):
-                date_map = _next_trading_dates(date_str, HORIZONS, dataset.dates)
+                date_map = _next_trading_dates(
+                    date_str,
+                    HORIZONS,
+                    dataset.dates,
+                    exchange=_resolve_exchange_for_commodity(commodity),
+                )
                 for h in HORIZONS:
                     csv_rows.append(
                         {

@@ -11,7 +11,7 @@ import seaborn as sns
 from pandas.tseries.offsets import BDay
 
 from src.data.dataset_tft import TFTDataLoader
-from src.data.bigquery_loader import load_price_table
+from src.data.bigquery_loader import load_price_table, load_news_features_bq
 from src.models.TFT import TemporalFusionTransformer
 from src.utils.unified_output import build_forecast_payload, map_horizon_values, write_json
 
@@ -50,6 +50,7 @@ def _load_scaler(checkpoint_path: Path) -> Optional[Dict[str, np.ndarray]]:
         "x_std": sc.get("x_std", None),
         "y_mean": sc.get("y_mean", None),
         "y_std": sc.get("y_std", None),
+        "feature_names": sc.get("feature_names", None),
     }
 
 
@@ -112,10 +113,74 @@ def _build_trading_calendar(data_dir: Path, commodity: str) -> List[str]:
     return sorted(set(dates))
 
 
+def _resolve_exchange_for_commodity(commodity: Optional[str]) -> str:
+    if not commodity:
+        return "NYSE"
+    key = str(commodity).strip()
+    mapping = {
+        "corn": "CBOT",
+        "wheat": "CBOT",
+        "soybean": "CBOT",
+        "gold": "COMEX",
+        "silver": "COMEX",
+        "copper": "COMEX",
+        "ZC=F": "CBOT",
+        "ZW=F": "CBOT",
+        "ZS=F": "CBOT",
+        "GC=F": "COMEX",
+        "SI=F": "COMEX",
+        "HG=F": "COMEX",
+    }
+    if key in mapping:
+        return mapping[key]
+    lower = key.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return "NYSE"
+
+
+def _exchange_future_dates(
+    as_of: str,
+    horizons: Sequence[int],
+    exchange: str = "NYSE",
+) -> Dict[int, str]:
+    if not horizons:
+        return {}
+    try:
+        import pandas_market_calendars as mcal
+    except Exception:
+        return {}
+    try:
+        calendar = mcal.get_calendar(exchange)
+    except Exception:
+        return {}
+
+    base = pd.to_datetime(as_of, errors="coerce")
+    if pd.isna(base):
+        return {}
+    max_h = max(int(h) for h in horizons)
+    if max_h <= 0:
+        return {}
+    start = base + pd.Timedelta(days=1)
+    end = base + pd.Timedelta(days=max_h * 5 + 7)
+    try:
+        valid_days = calendar.valid_days(start_date=start, end_date=end)
+    except Exception:
+        return {}
+    day_list = [d.date().isoformat() for d in valid_days]
+    mapping: Dict[int, str] = {}
+    for h in horizons:
+        idx = int(h) - 1
+        if 0 <= idx < len(day_list):
+            mapping[int(h)] = day_list[idx]
+    return mapping
+
+
 def _next_trading_dates(
     as_of: str,
     horizons: Sequence[int],
     trading_calendar: Sequence[str],
+    exchange: str = "NYSE",
 ) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     if trading_calendar and as_of in trading_calendar:
@@ -124,6 +189,9 @@ def _next_trading_dates(
         for h in horizons:
             if h - 1 < len(future):
                 mapping[int(h)] = future[h - 1]
+    missing = [int(h) for h in horizons if int(h) not in mapping]
+    if missing:
+        mapping.update(_exchange_future_dates(as_of, missing, exchange=exchange))
     base = pd.to_datetime(as_of)
     for h in horizons:
         if int(h) not in mapping:
@@ -309,6 +377,10 @@ def run_inference_tft(
     bq_dataset_id: Optional[str] = None,
     bq_train_table: str = "train_price",
     bq_inference_table: str = "inference_price",
+    news_source: str = "csv",
+    bq_news_project_id: Optional[str] = None,
+    bq_news_dataset_id: Optional[str] = None,
+    bq_news_table: str = "daily_summary",
     split: str = "test",
     batch_size: int = 128,
     num_workers: int = 4,
@@ -338,6 +410,14 @@ def run_inference_tft(
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     exp_name = exp_name or f"tft_w{seq_length}_h{'-'.join(map(str, horizons))}"
     ckpt_path = _resolve_checkpoint_path(commodity, fold, horizons, checkpoint_path)
+    # Load scaler early so we can enforce the training feature order.
+    scaler = _load_scaler(ckpt_path)
+    feature_columns = None
+    if scaler is not None:
+        feature_names = scaler.get("feature_names", None)
+        if feature_names is not None:
+            # np.load returns array-like; convert to list of strings.
+            feature_columns = [str(f) for f in feature_names.tolist()]
 
     price_file = f"preprocessing/{commodity}_feature_engineering.csv"
     news_file = "news_features.csv"
@@ -424,20 +504,31 @@ def run_inference_tft(
         if candidate.exists():
             split_path = candidate
 
+    news_data_source = str(Path(data_dir) / news_file)
+    if news_source == "bigquery":
+        if not bq_news_project_id or not bq_news_dataset_id:
+            raise ValueError("BigQuery news project_id and dataset_id are required.")
+        news_data_source = load_news_features_bq(
+            project_id=bq_news_project_id,
+            dataset_id=bq_news_dataset_id,
+            table=bq_news_table,
+            commodity=commodity,
+        )
+
     data_loader = TFTDataLoader(
         price_data_path=price_source,
-        news_data_path=str(Path(data_dir) / news_file),
+        news_data_path=news_data_source,
         split_file=str(split_path),
         seq_length=seq_length,
         horizons=list(horizons),
         batch_size=batch_size,
         num_workers=num_workers,
+        feature_columns=feature_columns,
         require_targets=(split != "inference"),
         seed=seed,
     )
 
     # Load scaler saved during training so inference matches training preprocessing.
-    scaler = _load_scaler(ckpt_path)
     y_mean = None
     y_std = None
     if scaler is not None:
@@ -592,7 +683,12 @@ def run_inference_tft(
                     if y_mean is not None and y_std is not None:
                         pred_row = pred_row * y_std + y_mean
 
-                    pred_date_map = _next_trading_dates(date_str, horizons, trading_calendar)
+                    pred_date_map = _next_trading_dates(
+                        date_str,
+                        horizons,
+                        trading_calendar,
+                        exchange=_resolve_exchange_for_commodity(commodity),
+                    )
                     pred_dates = [pred_date_map[int(h)] for h in horizons]
                     pred_close = [float(base_close * np.exp(v)) for v in pred_row]
 
@@ -660,7 +756,12 @@ def run_inference_tft(
 
         target_vals = trues[idx] if include_targets else None
 
-        pred_date_map = _next_trading_dates(date_str, horizons, trading_calendar)
+        pred_date_map = _next_trading_dates(
+            date_str,
+            horizons,
+            trading_calendar,
+            exchange=_resolve_exchange_for_commodity(commodity),
+        )
         pred_dates_payload = {f"h{int(h)}": pred_date_map[int(h)] for h in horizons}
 
         payload = build_forecast_payload(

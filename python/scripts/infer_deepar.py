@@ -77,6 +77,19 @@ def _build_time_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _ensure_log_return1(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "close" not in df.columns:
+        return df
+    df = df.sort_values("time").reset_index(drop=True)
+    calc = np.log(df["close"] / df["close"].shift(1))
+    if "log_return_1" in df.columns:
+        df["log_return_1"] = df["log_return_1"].fillna(calc)
+    else:
+        df["log_return_1"] = calc
+    return df
+
+
 def _prepare_features(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
     df = df.copy()
     df["rv_5"] = df["log_return_1"].rolling(5).std()
@@ -148,10 +161,74 @@ def _calendar_from_frames(
     return sorted(set(dates))
 
 
+def _resolve_exchange_for_commodity(commodity: Optional[str]) -> str:
+    if not commodity:
+        return "NYSE"
+    key = str(commodity).strip()
+    mapping = {
+        "corn": "CBOT",
+        "wheat": "CBOT",
+        "soybean": "CBOT",
+        "gold": "COMEX",
+        "silver": "COMEX",
+        "copper": "COMEX",
+        "ZC=F": "CBOT",
+        "ZW=F": "CBOT",
+        "ZS=F": "CBOT",
+        "GC=F": "COMEX",
+        "SI=F": "COMEX",
+        "HG=F": "COMEX",
+    }
+    if key in mapping:
+        return mapping[key]
+    lower = key.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return "NYSE"
+
+
+def _exchange_future_dates(
+    as_of: str,
+    horizons: List[int],
+    exchange: str = "NYSE",
+) -> dict[int, str]:
+    if not horizons:
+        return {}
+    try:
+        import pandas_market_calendars as mcal
+    except Exception:
+        return {}
+    try:
+        calendar = mcal.get_calendar(exchange)
+    except Exception:
+        return {}
+
+    base = pd.to_datetime(as_of, errors="coerce")
+    if pd.isna(base):
+        return {}
+    max_h = max(int(h) for h in horizons)
+    if max_h <= 0:
+        return {}
+    start = base + pd.Timedelta(days=1)
+    end = base + pd.Timedelta(days=max_h * 5 + 7)
+    try:
+        valid_days = calendar.valid_days(start_date=start, end_date=end)
+    except Exception:
+        return {}
+    day_list = [d.date().isoformat() for d in valid_days]
+    mapping: dict[int, str] = {}
+    for h in horizons:
+        idx = int(h) - 1
+        if 0 <= idx < len(day_list):
+            mapping[int(h)] = day_list[idx]
+    return mapping
+
+
 def _next_trading_dates(
     as_of: str,
     horizons: List[int],
     trading_calendar: List[str],
+    exchange: str = "NYSE",
 ) -> dict[int, str]:
     mapping: dict[int, str] = {}
     if trading_calendar and as_of in trading_calendar:
@@ -160,6 +237,9 @@ def _next_trading_dates(
         for h in horizons:
             if h - 1 < len(future):
                 mapping[h] = future[h - 1]
+    missing = [int(h) for h in horizons if int(h) not in mapping]
+    if missing:
+        mapping.update(_exchange_future_dates(as_of, missing, exchange=exchange))
     base = pd.to_datetime(as_of)
     for h in horizons:
         if h not in mapping:
@@ -222,6 +302,8 @@ def main(cfg: DeepARInferConfig) -> None:
         df = pd.concat([train_raw, infer_raw], axis=0).drop_duplicates(subset=["time"]).sort_values("time")
     else:
         df = train_raw.copy()
+
+    df = _ensure_log_return1(df)
     df, feature_cols = _prepare_features(df)
     df = _build_time_index(df)
     if infer_raw is not None and not infer_raw.empty:
@@ -237,11 +319,22 @@ def main(cfg: DeepARInferConfig) -> None:
         )
     )
     predictor = PyTorchPredictor.deserialize(ckpt_dir)
-    infer_ds = _build_infer_dataset(df, "log_return_1", feature_cols, cfg.prediction_length)
+    infer_source = df
+    if infer_raw is not None and not infer_raw.empty:
+        infer_start = pd.to_datetime(infer_raw["time"]).min()
+        infer_block = df[df["time"] >= infer_start].copy()
+        if len(infer_block) < cfg.seq_length:
+            pad_len = cfg.seq_length - len(infer_block)
+            train_tail = df[df["time"] < infer_start].tail(pad_len)
+            infer_source = pd.concat([train_tail, infer_block], ignore_index=True)
+        else:
+            infer_source = infer_block
+
+    infer_ds = _build_infer_dataset(infer_source, "log_return_1", feature_cols, cfg.prediction_length)
     forecast_it = predictor.predict(infer_ds, num_samples=cfg.num_samples)
     forecast = list(forecast_it)[0]
 
-    base_close = float(df.sort_values("time").iloc[-1]["close"])
+    base_close = float(infer_source.sort_values("time").iloc[-1]["close"])
     quantile_close = {}
     for q in cfg.quantiles:
         log_q = forecast.quantile(q)
@@ -255,7 +348,12 @@ def main(cfg: DeepARInferConfig) -> None:
 
     future_path = _resolve_future_price_path(cfg.data_dir, cfg.target_commodity, cfg.future_price_file)
     trading_calendar = _calendar_from_frames(infer_raw, train_raw, future_path)
-    date_map = _next_trading_dates(as_of, list(range(1, cfg.prediction_length + 1)), trading_calendar)
+    date_map = _next_trading_dates(
+        as_of,
+        list(range(1, cfg.prediction_length + 1)),
+        trading_calendar,
+        exchange=_resolve_exchange_for_commodity(cfg.target_commodity),
+    )
 
     q50 = quantile_close.get("q50")
     q10 = quantile_close.get("q10")

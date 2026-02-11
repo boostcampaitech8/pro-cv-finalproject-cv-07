@@ -26,17 +26,28 @@ import logging
 # 순서대로 Cron, Wheat, Soybean, Gold, Sliver, Copper
 SYMBOLS = ["ZC=F", "ZW=F", "ZS=F", "GC=F", "SI=F", "HG=F"]
 
+logger = logging.getLogger("airflow.task")
 
-load_dotenv("/data/ephemeral/home/airflow/.env")
+_env_candidates = [
+    os.getenv("AIRFLOW_ENV"),
+    os.getenv("AIRFLOW_HOME") and os.path.join(os.getenv("AIRFLOW_HOME"), ".env"),
+    "/data/ephemeral/home/pro-cv-finalproject-cv-07/airflow/.env",
+    "/data/ephemeral/home/airflow/.env",
+]
+for _env_path in _env_candidates:
+    if _env_path and os.path.exists(_env_path):
+        load_dotenv(_env_path)
+        break
 
 project_id = os.getenv("BIGQUERY_PROJECT")
 dataset_id = os.getenv("BIGQUERY_DATASET")
 credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 bucket_name = 'boostcamp-final-proj'
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-
-logger = logging.getLogger("airflow.task")
+if credentials_path:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+else:
+    logger.warning("GOOGLE_APPLICATION_CREDENTIALS not set. BQ/GCS access may fail.")
 
 
 def extract_yahoo_ohlcv(ticker, start, end):

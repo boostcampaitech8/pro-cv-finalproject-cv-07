@@ -21,6 +21,10 @@ class TFTConfig:
     bq_train_table: str = "train_price"
     bq_inference_table: str = "inference_price"
     split_file: str = "src/datasets/bq_splits/{commodity}_split.json"
+    news_source: str = "bigquery"  # csv or bigquery
+    bq_news_project_id: str = "gcp-practice-484218"
+    bq_news_dataset_id: str = "news_data"
+    bq_news_table: str = "daily_summary"
 
     # ===== Data =====
     target_commodity: str = "corn"
@@ -84,6 +88,10 @@ class TFTInferenceConfig:
     bq_train_table: str = "train_price"
     bq_inference_table: str = "inference_price"
     split_file: str = "src/datasets/bq_splits/{commodity}_split.json"
+    news_source: str = "bigquery"  # csv or bigquery
+    bq_news_project_id: str = "gcp-practice-484218"
+    bq_news_dataset_id: str = "news_data"
+    bq_news_table: str = "daily_summary"
 
     # ===== Data =====
     target_commodity: str = "corn"

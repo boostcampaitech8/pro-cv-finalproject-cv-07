@@ -36,7 +36,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from src.configs.train_config import TrainConfig
 from src.utils.set_seed import set_seed
 from src.data.dataset_tft import TFTDataLoader
-from src.data.bigquery_loader import load_price_table
+from src.data.bigquery_loader import load_price_table, load_news_features_bq
 from src.models.TFT import TemporalFusionTransformer, QuantileLoss
 from src.engine.trainer_tft import train
 from src.utils.visualization import save_loss_curve
@@ -125,6 +125,7 @@ def main(config: TrainConfig):
         f"preprocessing/{config.target_commodity}_feature_engineering.csv"
     )
     news_path = os.path.join(config.data_dir, "news_features.csv")
+    news_source = news_path
     price_source = feature_path
     if config.data_source == "bigquery":
         price_source = load_price_table(
@@ -136,19 +137,33 @@ def main(config: TrainConfig):
     else:
         if os.path.exists(train_price_path):
             price_source = train_price_path
+    if getattr(config, "news_source", "csv") == "bigquery":
+        news_source = load_news_features_bq(
+            project_id=config.bq_news_project_id,
+            dataset_id=config.bq_news_dataset_id,
+            table=config.bq_news_table,
+            commodity=config.target_commodity,
+        )
     split_file = config.split_file
     if "{commodity}" in split_file:
         split_file = split_file.format(commodity=config.target_commodity)
     split_path = Path(split_file)
     if not split_path.is_absolute():
-        split_path = Path(config.data_dir) / split_file
+        project_root = Path(__file__).resolve().parents[1]
+        candidate = project_root / split_file
+        if candidate.exists():
+            split_path = candidate
+        else:
+            split_path = (Path(config.data_dir) / split_file).resolve()
+    else:
+        split_path = split_path.resolve()
 
     # --------------------
     # Data loader
     # --------------------
     data_loader = TFTDataLoader(
         price_data_path=price_source,
-        news_data_path=news_path,
+        news_data_path=news_source,
         split_file=str(split_path),
         seq_length=config.seq_length,
         horizons=config.horizons,
@@ -275,6 +290,7 @@ def main(config: TrainConfig):
                 x_std=scaler.get("x_std", None),
                 y_mean=scaler.get("y_mean", None),
                 y_std=scaler.get("y_std", None),
+                feature_names=scaler.get("feature_names", None),
             )
             print(f"✓ Saved scaler: {fold_dir / 'scaler.npz'}")
         

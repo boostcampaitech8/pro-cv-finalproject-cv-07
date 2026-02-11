@@ -1,4 +1,5 @@
 import ast
+import io
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -9,6 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate
 
+from src.data.bigquery_loader import COMMODITY_TO_SYMBOL, load_price_table
 
 HORIZONS = list(range(1, 21))
 # Volume-based auxiliary features are intentionally disabled.
@@ -61,27 +63,38 @@ def _parse_embedding(value) -> np.ndarray:
     return np.asarray([value], dtype=np.float32)
 
 
-def _load_news_features(path: Path) -> Tuple[Dict[str, np.ndarray], int]:
-    if not path.exists():
+def _load_news_features_df(df: pd.DataFrame) -> Tuple[Dict[str, np.ndarray], int]:
+    if df is None or df.empty:
         return {}, 512
 
-    df = pd.read_csv(path)
+    df = df.copy()
     if "date" not in df.columns:
-        raise ValueError("news_features.csv must include a 'date' column.")
+        if "collect_date" in df.columns:
+            df["date"] = pd.to_datetime(df["collect_date"], errors="coerce")
+        else:
+            raise ValueError("news features must include a 'date' or 'collect_date' column.")
+    else:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"]).copy()
     df["date"] = df["date"].dt.strftime("%Y-%m-%d")
 
-    embedding_cols = [c for c in df.columns if c != "date"]
     embeddings: List[np.ndarray] = []
-
     if "embedding" in df.columns or "embedding[512]" in df.columns:
         col = "embedding" if "embedding" in df.columns else "embedding[512]"
         for value in df[col].tolist():
             embeddings.append(_parse_embedding(value))
     else:
-        embeddings = [df.loc[i, embedding_cols].to_numpy(dtype=np.float32) for i in df.index]
+        emb_cols = [c for c in df.columns if c.startswith("news_emb_")]
+        if emb_cols:
+            embeddings = [df.loc[i, emb_cols].to_numpy(dtype=np.float32) for i in df.index]
+        else:
+            numeric_cols = [
+                c for c in df.columns
+                if c not in {"date", "collect_date", "news_count"}
+                and np.issubdtype(df[c].dtype, np.number)
+            ]
+            embeddings = [df.loc[i, numeric_cols].to_numpy(dtype=np.float32) for i in df.index]
 
     max_dim = max((len(vec) for vec in embeddings), default=0)
     if max_dim == 0:
@@ -94,11 +107,16 @@ def _load_news_features(path: Path) -> Tuple[Dict[str, np.ndarray], int]:
             vec = np.concatenate([vec, pad])
         padded_embeddings.append(vec.astype(np.float32))
 
-    data = {
-        date: vec
-        for date, vec in zip(df["date"].tolist(), padded_embeddings)
-    }
+    data = {date: vec for date, vec in zip(df["date"].tolist(), padded_embeddings)}
     return data, max_dim
+
+
+def _load_news_features(path: Path) -> Tuple[Dict[str, np.ndarray], int]:
+    if not path.exists():
+        return {}, 512
+
+    df = pd.read_csv(path)
+    return _load_news_features_df(df)
 
 
 def _load_grayscale_image(path: Path) -> np.ndarray:
@@ -114,6 +132,38 @@ def _load_grayscale_image(path: Path) -> np.ndarray:
         img = img.convert("L")
         array = np.asarray(img, dtype=np.float32) / 255.0
 
+    return array
+
+
+_GCS_CLIENT = None
+
+
+def _get_gcs_client():
+    global _GCS_CLIENT
+    if _GCS_CLIENT is None:
+        try:
+            from google.cloud import storage
+        except ImportError as exc:
+            raise ImportError("google-cloud-storage is required to load images from GCS.") from exc
+        _GCS_CLIENT = storage.Client()
+    return _GCS_CLIENT
+
+
+def _load_grayscale_image_gcs(bucket_name: str, blob_name: str) -> np.ndarray:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ImportError("Pillow is required to load images.") from exc
+
+    client = _get_gcs_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    if not blob.exists():
+        raise FileNotFoundError(f"Image not found in GCS: gs://{bucket_name}/{blob_name}")
+    data = blob.download_as_bytes()
+    with Image.open(io.BytesIO(data)) as img:
+        img = img.convert("L")
+        array = np.asarray(img, dtype=np.float32) / 255.0
     return array
 
 
@@ -135,6 +185,16 @@ class CNNDataset(Dataset):
         aux_type: str = "news",
         data_dir: Optional[str] = None,
         split_file: Optional[str] = None,
+        news_data: Optional[pd.DataFrame] = None,
+        data_source: str = "local",
+        bq_project_id: Optional[str] = None,
+        bq_dataset_id: Optional[str] = None,
+        bq_train_table: str = "train_price",
+        bq_inference_table: str = "inference_price",
+        bq_test_table: str = "test_price",
+        image_source: str = "local",
+        gcs_bucket: Optional[str] = None,
+        gcs_prefix_template: str = "{symbol}/window_{window}_ohlc",
     ) -> None:
         if split not in {"train", "val", "test", "infer"}:
             raise ValueError("split must be 'train', 'val', 'test', or 'infer'.")
@@ -150,6 +210,16 @@ class CNNDataset(Dataset):
         self.image_mode = image_mode
         self.use_aux = use_aux
         self.aux_type = aux_type
+        self.data_source = data_source
+        self.bq_project_id = bq_project_id
+        self.bq_dataset_id = bq_dataset_id
+        self.bq_train_table = bq_train_table
+        self.bq_inference_table = bq_inference_table
+        self.bq_test_table = bq_test_table
+        self.image_source = image_source
+        self.gcs_bucket = gcs_bucket
+        self.gcs_prefix_template = gcs_prefix_template
+        self.symbol = COMMODITY_TO_SYMBOL.get(commodity.lower(), commodity)
 
         self.data_root = Path(data_dir) if data_dir else Path("src/datasets")
         self.preprocessing_root = self.data_root / "preprocessing"
@@ -164,20 +234,27 @@ class CNNDataset(Dataset):
                 self.fold_path = self.data_root / f"{commodity}_split.json"
             else:
                 self.fold_path = self.data_root / "rolling_fold.json"
-        local_candle_root = self.data_root / "candle_img"
-        if data_dir and local_candle_root.exists():
-            self.image_root = self.data_root
-            self.image_mode_to_folder = {
-                "candle": "candle_img",
-                "gaf": "gaf_img",
-                "rp": "rp_img",
-            }
+        if self.image_source == "gcs":
+            self.image_root = None
+            self.image_mode_to_folder = {}
         else:
-            self.image_root = self.preprocessing_root / f"{commodity}_cnn_preprocessing"
-            self.image_mode_to_folder = IMAGE_MODE_TO_FOLDER
+            local_candle_root = self.data_root / "candle_img"
+            if data_dir and local_candle_root.exists():
+                self.image_root = self.data_root
+                self.image_mode_to_folder = {
+                    "candle": "candle_img",
+                    "gaf": "gaf_img",
+                    "rp": "rp_img",
+                }
+            else:
+                self.image_root = self.preprocessing_root / f"{commodity}_cnn_preprocessing"
+                self.image_mode_to_folder = IMAGE_MODE_TO_FOLDER
         self.news_path = self.data_root / "news_features.csv"
+        self.news_data = news_data
 
-        if self.feature_path.exists():
+        if self.data_source == "bigquery":
+            self.df = self._load_from_bigquery()
+        elif self.feature_path.exists():
             self.df = pd.read_csv(self.feature_path)
         else:
             self.df = self._load_from_price_splits()
@@ -229,7 +306,10 @@ class CNNDataset(Dataset):
         self.news_embeddings: Dict[str, np.ndarray] = {}
         self.news_dim = 0
         if self.use_aux and self.aux_type == "news":
-            self.news_embeddings, self.news_dim = _load_news_features(self.news_path)
+            if self.news_data is not None:
+                self.news_embeddings, self.news_dim = _load_news_features_df(self.news_data)
+            else:
+                self.news_embeddings, self.news_dim = _load_news_features(self.news_path)
             if self.news_dim == 0:
                 self.news_dim = 512
 
@@ -277,6 +357,64 @@ class CNNDataset(Dataset):
                 "Duplicate dates across price splits detected. "
                 f"Sample duplicates: {sample}. "
                 "Please ensure train/test/inference splits are non-overlapping."
+            )
+        merged = merged.drop(columns=["_source"], errors="ignore").reset_index(drop=True)
+        return merged
+
+    def _load_from_bigquery(self) -> pd.DataFrame:
+        """
+        Load price data from BigQuery train/test/inference tables.
+        """
+        if not self.bq_project_id or not self.bq_dataset_id:
+            raise ValueError("BigQuery project_id/dataset_id must be provided for data_source='bigquery'.")
+
+        candidates = [
+            (self.bq_train_table, "train"),
+            (self.bq_test_table, "test"),
+            (self.bq_inference_table, "inference"),
+        ]
+        frames: List[pd.DataFrame] = []
+        for table, source in candidates:
+            if not table:
+                continue
+            try:
+                df = load_price_table(
+                    project_id=self.bq_project_id,
+                    dataset_id=self.bq_dataset_id,
+                    table=table,
+                    commodity=self.commodity,
+                )
+            except Exception as exc:
+                print(f"⚠️  Skipping BigQuery table '{table}' (reason: {exc})")
+                continue
+            if df.empty:
+                continue
+            df["_source"] = source
+            frames.append(df)
+
+        if not frames:
+            raise FileNotFoundError(
+                "No price tables loaded from BigQuery. "
+                f"Checked tables: {[c[0] for c in candidates if c[0]]}."
+            )
+
+        merged = pd.concat(frames, axis=0, ignore_index=True)
+        if "time" not in merged.columns:
+            raise ValueError("Expected 'time' column in BigQuery price tables.")
+        merged["time"] = pd.to_datetime(merged["time"], errors="coerce")
+        merged = merged.dropna(subset=["time"]).sort_values("time")
+        if merged["time"].duplicated().any():
+            dup_dates = (
+                merged.loc[merged["time"].duplicated(keep=False), "time"]
+                .dt.strftime("%Y-%m-%d")
+                .unique()
+                .tolist()
+            )
+            sample = ", ".join(dup_dates[:10])
+            raise ValueError(
+                "Duplicate dates across BigQuery price tables detected. "
+                f"Sample duplicates: {sample}. "
+                "Please ensure train/test/inference tables are non-overlapping."
             )
         merged = merged.drop(columns=["_source"], errors="ignore").reset_index(drop=True)
         return merged
@@ -478,6 +616,20 @@ class CNNDataset(Dataset):
         return torch.from_numpy(image.astype(np.float32))
 
     def _load_single_image(self, mode: str, date_str: str) -> np.ndarray:
+        if self.image_source == "gcs":
+            if mode != "candle":
+                raise ValueError("GCS image source currently supports only candle images.")
+            if not self.gcs_bucket:
+                raise ValueError("gcs_bucket must be provided for image_source='gcs'.")
+            prefix = self.gcs_prefix_template.format(
+                symbol=self.symbol,
+                commodity=self.commodity,
+                window=self.window_size,
+                mode=mode,
+            ).strip("/")
+            blob_name = f"{prefix}/{date_str}.png"
+            return _load_grayscale_image_gcs(self.gcs_bucket, blob_name)
+
         folder = self.image_mode_to_folder.get(mode)
         if folder is None:
             raise ValueError(f"Unsupported image mode: {mode}")

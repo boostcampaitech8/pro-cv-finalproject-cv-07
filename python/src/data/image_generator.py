@@ -131,6 +131,11 @@ def generate_candlestick_image(
     price_range = max_price - min_price
     if price_range < 1e-8:
         price_range = 1.0
+    # Add a small padding so candles don't touch the image border.
+    pad = price_range * 0.02
+    min_price -= pad
+    max_price += pad
+    price_range = max_price - min_price
 
     def normalize_price(price: float) -> float:
         return (price - min_price) / price_range

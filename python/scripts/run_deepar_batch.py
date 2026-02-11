@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 import json
+import warnings
+
+# Suppress noisy runtime warnings in batch runs
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
@@ -150,6 +154,19 @@ def _build_time_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _ensure_log_return1(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if "close" not in df.columns:
+        return df
+    df = df.sort_values("time").reset_index(drop=True)
+    calc = np.log(df["close"] / df["close"].shift(1))
+    if "log_return_1" in df.columns:
+        df["log_return_1"] = df["log_return_1"].fillna(calc)
+    else:
+        df["log_return_1"] = calc
+    return df
+
+
 def _prepare_features(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
     df = df.copy()
     df["rv_5"] = df["log_return_1"].rolling(5).std()
@@ -171,6 +188,8 @@ def _prepare_features(df: pd.DataFrame) -> tuple[pd.DataFrame, List[str]]:
         and not c.startswith("log_return_")
     ]
     feature_cols = [c for c in feature_cols if c not in SENT_RATIOS + TIME_RATIOS + SENT_SCORES + TIME_SCORES]
+    # Keep only numeric feature columns (drop symbol/strings/timestamps from BQ)
+    feature_cols = [c for c in feature_cols if pd.api.types.is_numeric_dtype(df[c])]
 
     # Avoid NaNs/Infs breaking StudentT loss
     numeric_cols = [c for c in (feature_cols + ["log_return_1"]) if c in df.columns]
@@ -226,10 +245,74 @@ def _calendar_from_frames(
     return sorted(set(dates))
 
 
+def _resolve_exchange_for_commodity(commodity: Optional[str]) -> str:
+    if not commodity:
+        return "NYSE"
+    key = str(commodity).strip()
+    mapping = {
+        "corn": "CBOT",
+        "wheat": "CBOT",
+        "soybean": "CBOT",
+        "gold": "COMEX",
+        "silver": "COMEX",
+        "copper": "COMEX",
+        "ZC=F": "CBOT",
+        "ZW=F": "CBOT",
+        "ZS=F": "CBOT",
+        "GC=F": "COMEX",
+        "SI=F": "COMEX",
+        "HG=F": "COMEX",
+    }
+    if key in mapping:
+        return mapping[key]
+    lower = key.lower()
+    if lower in mapping:
+        return mapping[lower]
+    return "NYSE"
+
+
+def _exchange_future_dates(
+    as_of: str,
+    horizons: List[int],
+    exchange: str = "NYSE",
+) -> Dict[int, str]:
+    if not horizons:
+        return {}
+    try:
+        import pandas_market_calendars as mcal
+    except Exception:
+        return {}
+    try:
+        calendar = mcal.get_calendar(exchange)
+    except Exception:
+        return {}
+
+    base = pd.to_datetime(as_of, errors="coerce")
+    if pd.isna(base):
+        return {}
+    max_h = max(int(h) for h in horizons)
+    if max_h <= 0:
+        return {}
+    start = base + pd.Timedelta(days=1)
+    end = base + pd.Timedelta(days=max_h * 5 + 7)
+    try:
+        valid_days = calendar.valid_days(start_date=start, end_date=end)
+    except Exception:
+        return {}
+    day_list = [d.date().isoformat() for d in valid_days]
+    mapping: Dict[int, str] = {}
+    for h in horizons:
+        idx = int(h) - 1
+        if 0 <= idx < len(day_list):
+            mapping[int(h)] = day_list[idx]
+    return mapping
+
+
 def _next_trading_dates(
     as_of: str,
     horizons: List[int],
     trading_calendar: List[str],
+    exchange: str = "NYSE",
 ) -> Dict[int, str]:
     mapping: Dict[int, str] = {}
     if trading_calendar and as_of in trading_calendar:
@@ -238,6 +321,9 @@ def _next_trading_dates(
         for h in horizons:
             if h - 1 < len(future):
                 mapping[h] = future[h - 1]
+    missing = [int(h) for h in horizons if int(h) not in mapping]
+    if missing:
+        mapping.update(_exchange_future_dates(as_of, missing, exchange=exchange))
     base = pd.to_datetime(as_of)
     for h in horizons:
         if h not in mapping:
@@ -647,15 +733,26 @@ def main(cfg: DeepARConfig) -> None:
     else:
         df = train_raw.copy()
 
+    df = _ensure_log_return1(df)
     df, feature_cols = _prepare_features(df)
     df = _build_time_index(df)
 
     # split (train/val) from json
     split_file = cfg.split_file.format(commodity=cfg.target_commodity)
-    train_df, val_df = deepar_split(df, split_file, cfg.fold[0])
-    val_dates = _load_val_dates(split_file, cfg.fold[0])
+    split_path = Path(split_file)
+    if not split_path.is_absolute():
+        candidate = PROJECT_ROOT / split_path
+        if candidate.exists():
+            split_path = candidate
+        else:
+            split_path = (Path(cfg.data_dir) / split_path).resolve()
+    else:
+        split_path = split_path.resolve()
 
-    # inference series: use full combined series (train + inference if present)
+    train_df, val_df = deepar_split(df, str(split_path), cfg.fold[0])
+    val_dates = _load_val_dates(str(split_path), cfg.fold[0])
+
+    # inference series: use train tail + inference when available
     full_df = df.copy()
 
     if infer_raw is not None and not infer_raw.empty:
@@ -737,12 +834,22 @@ def main(cfg: DeepARConfig) -> None:
             quantiles=cfg.quantiles,
         )
 
-        # inference
-        infer_ds = _build_infer_dataset(full_df, "log_return_1", feature_cols, cfg.prediction_length)
+        # inference: if inference_price shorter than context, pad with train tail
+        infer_source = full_df
+        if infer_raw is not None and not infer_raw.empty:
+            infer_start = pd.to_datetime(infer_raw["time"]).min()
+            infer_block = full_df[full_df["time"] >= infer_start].copy()
+            if len(infer_block) < ctx_len:
+                pad_len = ctx_len - len(infer_block)
+                train_tail = full_df[full_df["time"] < infer_start].tail(pad_len)
+                infer_source = pd.concat([train_tail, infer_block], ignore_index=True)
+            else:
+                infer_source = infer_block
+        infer_ds = _build_infer_dataset(infer_source, "log_return_1", feature_cols, cfg.prediction_length)
         forecast_it = predictor.predict(infer_ds, num_samples=cfg.num_samples)
         forecast = list(forecast_it)[0]
 
-        base_close = float(full_df.sort_values("time").iloc[-1]["close"])
+        base_close = float(infer_source.sort_values("time").iloc[-1]["close"])
 
         quantile_close = {}
         for q in cfg.quantiles:
@@ -872,7 +979,12 @@ def main(cfg: DeepARConfig) -> None:
             plt.close()
 
         # combined csv rows (TFT-style)
-        date_map = _next_trading_dates(as_of, cfg.horizons, trading_calendar)
+        date_map = _next_trading_dates(
+            as_of,
+            cfg.horizons,
+            trading_calendar,
+            exchange=_resolve_exchange_for_commodity(cfg.target_commodity),
+        )
         q50 = quantile_close.get("q50")
         q10 = quantile_close.get("q10")
         q90 = quantile_close.get("q90")

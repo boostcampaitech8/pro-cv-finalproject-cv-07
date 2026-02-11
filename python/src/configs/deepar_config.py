@@ -22,14 +22,14 @@ class DeepARConfig:
     horizons: List[int] = field(default_factory=lambda: list(range(1, 21)))
 
     # ===== Training =====
-    epochs: int = 300
+    epochs: int = 150
     fold: List[int] = field(default_factory=lambda: [0])
     num_samples: int = 200
     seed: int = 42
 
     # ===== Early Stopping =====
     early_stop: bool = True
-    patience: int = 20
+    patience: int = 10
     min_delta: float = 0.0
 
     # ===== Quantiles =====
