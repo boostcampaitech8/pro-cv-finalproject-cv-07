@@ -18,8 +18,8 @@ def add_news_sentiment(df, batch_size=256):
     df = df.copy()
     
     # 모델 정의
-    model = BertForSequenceClassification.from_pretrained("ahmedrachid/FinancialBERT-Sentiment-Analysis",num_labels=3)
-    tokenizer = BertTokenizer.from_pretrained("ahmedrachid/FinancialBERT-Sentiment-Analysis")
+    model = BertForSequenceClassification.from_pretrained("ahmedrachid/FinancialBERT-Sentiment-Analysis", num_labels=3, use_safetensors=True)
+    tokenizer = BertTokenizer.from_pretrained("ahmedrachid/FinancialBERT-Sentiment-Analysis", use_safetensors=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     nlp = pipeline("sentiment-analysis", model=model, tokenizer=tokenizer, device=device)
 
@@ -52,7 +52,8 @@ def add_news_timeframe(df, batch_size=256):
     classifier = pipeline(
         "text-classification",
         model="ProfessorLeVesseur/bert-base-cased-timeframe-classifier",
-        device=device
+        device=device,
+        use_safetensors=True
     )
 
     # input 정의
