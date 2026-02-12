@@ -1,4 +1,6 @@
 python/src/datasets/
+predict/src/datasets/
+predict/shared/src/datasets/
 *outputs/
 python/scripts/lightning_logs
 python/lightning_logs
@@ -10,11 +12,7 @@ _archive/
 python/--*
 
 # accidental experiment directories
-scripts/
-!python/scripts/
-!python/scripts/*
-python/scripts/lightning_logs/
-python/scripts/lightning_logs/**
+# (scripts are tracked)
 
 __pycache__/
 
@@ -33,3 +31,7 @@ airflow/*.pid
 
 # Service account keys (local)
 python/esoteric-buffer-485608-g5-5480b2b27a64.json
+
+# ensure shared scripts are tracked
+!predict/shared/scripts/
+!predict/shared/scripts/**

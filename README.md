@@ -17,7 +17,7 @@ Python
 `-- src
     |-- configs
     |   |-- __pycache__
-    |   `-- train_config.py
+|   `-- tft_config.py
     |-- data
     |   |-- __pycache__
     |   |-- dataset.py
@@ -55,7 +55,7 @@ Python
 ## 데이터 전처리
 
 - 최초 실행 시, 오래 걸릴 수 있음
-- 빠르게 실행하고 싶다면 노션에 전처리한 csv 파일 올려뒀으니 다운로드 후, python/src/datasets/preprocessing 폴더 생성 후 내부에 저장
+- 빠르게 실행하고 싶다면 노션에 전처리한 csv 파일 올려뒀으니 다운로드 후, predict/datasets/preprocessing 폴더 생성 후 내부에 저장
 ```Bash
 python scripts/preprocessing.py --use_ema_features --use_volatility_features --use_news_count_features --use_news_imformation_features
 ```
@@ -63,7 +63,7 @@ python scripts/preprocessing.py --use_ema_features --use_volatility_features --u
 ## 학습
 
 - 기본 코드는 t-20 ~ t-1 시점을 이용해서 t, t+4, t+9, t+19를 예측하도록 설정되어있음
-- epochs = 300 이 외의 기본 값은 train_config.py에서 확인
+- epochs = 300 이 외의 기본 값은 tft_config.py에서 확인
 - 만약, CLI로 파라미터 수정하면 test 실행할 때도 반영해서 실행하셈!!
 - 앙상블 코드도 구현은 해두었으나 성능이 그닥,,, 최근 데이터에 가중치 주는 방법으로 해야 성능이 좋을듯
 ```Bash
