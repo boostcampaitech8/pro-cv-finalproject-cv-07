@@ -4,7 +4,7 @@ from tyro import conf
 
 @dataclass
 class TrainConfig:
-    data_dir: str = "./shared/datasets"
+    data_dir: str = "./predict/shared/datasets"
     
     use_ema_features: bool = False
     ema_spans: List[int] = field(default_factory=lambda: [5, 10, 20, 50, 100])
