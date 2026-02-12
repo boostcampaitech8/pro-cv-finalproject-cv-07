@@ -76,45 +76,9 @@
      
 
 
-# 팀(부캠별의 커비) 소개
+# 🎀 팀(부캠별의 커비) 소개
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/tenaan">
-        <img src="assets/member3.png" width="100px;" alt="member3"/>
-        <br />
-        <sub><b>안태현</b></sub>
-      </a>
-      <br />
-      <a href="https://github.com/tenaan" title="Code"></a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/jjeongbin0826">
-        <img src="assets/member1.png" width="100px;" alt="member1"/>
-        <br />
-        <sub><b>최정빈</b></sub>
-      </a>
-      <br />
-      <a href="https://github.com/jjeongbin0826" title="Code"></a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/chocobanana20">
-        <img src="assets/member4.png" width="100px;" alt="member4"/>
-        <br />
-        <sub><b>이승현</b></sub>
-      </a>
-      <br />
-      <a href="https://github.com/chocobanana20" title="Code"></a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/wooqi00">
-        <img src="assets/member2.png" width="100px;" alt="member2"/>
-        <br />
-        <sub><b>윤종욱</b></sub>
-      </a>
-      <br />
-      <a href="https://github.com/wooqi00" title="Code"></a>
-    </td>
-  </tr>
-</table>
+| <img src="assets/member3.png" width="120"> | <img src="assets/member1.png" width="120"> | <img src="assets/member4.png" width="120"> | <img src="assets/member2.png" width="120"> |
+| :---: | :---: | :---: | :---: |
+| **안태현** | **최정빈** | **이승현** | **윤종욱** |
+| [@tenaan](https://github.com/tenaan) | [@jjeongbin0826](https://github.com/jjeongbin0826) | [@chocobanana20](https://github.com/chocobanana20) | [@wooqi00](https://github.com/wooqi00) |
