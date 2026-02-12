@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>프로필 - {{ user.nickname }}</title>
+    <style>
+        /* 기본 레이아웃 시스템 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: #f8f9fa;
+            min-height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* 상단 네비게이션 바 */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            height: 40px;
+            margin-bottom: 40px;
+            position: relative;
+        }
+
+        .back-btn {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            cursor: pointer;
+            position: absolute;
+            left: 0;
+            z-index: 10;
+        }
+
+        .nav-title {
+            width: 100%;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        /* 프로필 섹션 */
+        .profile-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding-bottom: 40px;
+        }
+
+        .profile-img {
+            width: 110px;
+            height: 110px;
+            border-radius: 38px;
+            object-fit: cover;
+            margin-bottom: 24px;
+            border: 4px solid #fff;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+        }
+
+        h2 {
+            font-size: 24px;
+            font-weight: 800;
+            margin: 0 0 40px 0;
+            color: #1a1a1a;
+            line-height: 1.4;
+        }
+
+        .nickname {
+            color: #5c9eff;
+        }
+
+        /* 버튼 그룹 */
+        .btn-group {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-width: 360px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 18px;
+            border-radius: 18px;
+            font-size: 16px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+            text-decoration: none;
+            box-sizing: border-box;
+        }
+
+        .btn:active {
+            transform: scale(0.97);
+        }
+
+        /* 메인 버튼 스타일 (동일하게 통일) */
+        .btn-primary {
+            background-color: #5c9eff;
+            color: white;
+            box-shadow: 0 4px 12px rgba(92, 158, 255, 0.2);
+        }
+
+        /* 로그아웃 버튼 스타일 */
+        .btn-secondary {
+            background-color: #f1f3f5;
+            color: #868e96;
+            margin-top: 8px;
+        }
+
+        /* 탈퇴 링크 */
+        .withdraw-link {
+            margin-top: 32px;
+            font-size: 13px;
+            color: #adb5bd;
+            text-decoration: none;
+            border-bottom: 1px solid transparent;
+        }
+
+        .withdraw-link:hover {
+            border-bottom-color: #dee2e6;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="nav-bar">
+            <div class="back-btn" onclick="location.href='/'">〈</div>
+            <div class="nav-title">내 프로필</div>
+        </div>
+
+        <div class="profile-content">
+            <img src="{{ user.profile_image or 'https://via.placeholder.com/100' }}" class="profile-img">
+            <h2>안녕하세요,<br><span class="nickname">{{ user.nickname }}</span>님!</h2>
+            
+            <div class="btn-group">
+                <button onclick="location.href='/chat-log'" class="btn btn-primary">💬 대화 로그 보기</button>
+                <button onclick="location.href='/edit-profile'" class="btn btn-primary">👤 정보 수정하기</button>
+                
+                <button onclick="location.href='/logout'" class="btn btn-secondary">로그아웃</button>
+            </div>
+            
+            <a href="/withdraw" class="withdraw-link">회원 탈퇴를 원하시나요?</a>
+        </div>
+    </div>
+
+</body>
+</html>

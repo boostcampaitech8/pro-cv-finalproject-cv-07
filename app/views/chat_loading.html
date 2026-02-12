@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주니를 깨우는 중</title>
+    <style>
+        :root {
+            --primary: #5c9eff;
+            --bg-gray: #f1f3f5; /* 데스크탑 배경색 */
+            --card-white: #f8f9fa; /* 기존 페이지의 컨테이너 배경색과 통일 */
+        }
+
+        body { 
+            margin: 0; 
+            background-color: var(--bg-gray); 
+            display: flex; 
+            justify-content: center; 
+            min-height: 100vh; 
+            font-family: -apple-system, sans-serif;
+            overflow: hidden; /* 애니메이션 중 스크롤 방지 */
+        }
+
+        /* 상세 페이지와 동일한 모바일 레이아웃 적용 */
+        .loading-container {
+            width: 100%;
+            max-width: 480px;
+            background-color: var(--card-white);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative; /* 구름의 기준점 */
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            padding: 24px;
+            box-sizing: border-box;
+            
+            /* 핵심: 이 박스를 벗어나는 모든 요소를 숨깁니다 */
+            overflow: hidden; 
+        }
+
+        .logo-wrapper {
+            position: relative;
+            width: 220px; 
+            height: 220px;
+            margin-bottom: 40px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .main-logo {
+            width: 120px;
+            height: auto;
+            z-index: 1;
+            animation: logo-fade-in 3s ease-out forwards;
+        }
+
+        @keyframes logo-fade-in {
+            0% { opacity: 0; transform: scale(0.7); filter: blur(5px); }
+            30% { opacity: 0.2; }
+            100% { opacity: 1; transform: scale(1); filter: blur(0); }
+        }
+
+        /* 구름 공통 스타일 */
+        .cloud {
+            position: absolute;
+            z-index: 2;
+            filter: blur(3px) drop-shadow(0 6px 15px rgba(0,0,0,0.1));
+            animation-fill-mode: forwards;
+            animation-duration: 3.0s; 
+            animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0.95;
+            user-select: none;
+        }
+
+        /* 구름 위치 설정 (컨테이너 내부 기준) */
+        .c1 { font-size: 110px; top: -20px; left: -40px; animation-name: cloud-out-top-left; }
+        .c2 { font-size: 100px; top: -30px; right: -30px; animation-name: cloud-out-top-right; animation-delay: 0.2s; }
+        .c3 { font-size: 120px; bottom: -20px; left: -30px; animation-name: cloud-out-bottom-left; animation-delay: 0.4s; }
+        .c4 { font-size: 105px; bottom: -10px; right: -40px; animation-name: cloud-out-bottom-right; animation-delay: 0.6s; }
+        .c5 { font-size: 90px; top: 40px; left: 40px; animation-name: cloud-out-center; animation-delay: 0.8s; z-index: 3; }
+        .c6 { font-size: 85px; top: 0px; left: 70px; animation-name: cloud-out-top; animation-delay: 0.3s; }
+        .c7 { font-size: 95px; top: 50%; left: -60px; animation-name: cloud-out-left; animation-delay: 0.5s; }
+        .c8 { font-size: 100px; top: 50%; right: -60px; animation-name: cloud-out-right; animation-delay: 0.7s; }
+
+        @keyframes cloud-out-top-left { 0% { transform: translate(0, 0); opacity: 0.95; } 100% { transform: translate(-180px, -150px) rotate(-30deg); opacity: 0; } }
+        @keyframes cloud-out-top-right { 0% { transform: translate(0, 0); opacity: 0.95; } 100% { transform: translate(180px, -140px) rotate(30deg); opacity: 0; } }
+        @keyframes cloud-out-bottom-left { 0% { transform: translate(0, 0); opacity: 0.95; } 100% { transform: translate(-170px, 160px) rotate(-20deg); opacity: 0; } }
+        @keyframes cloud-out-bottom-right { 0% { transform: translate(0, 0); opacity: 0.95; } 100% { transform: translate(190px, 150px) rotate(20deg); opacity: 0; } }
+        @keyframes cloud-out-center { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(3); opacity: 0; } }
+        @keyframes cloud-out-top { 0% { transform: translateY(0); opacity: 0.95; } 100% { transform: translateY(-180px); opacity: 0; } }
+        @keyframes cloud-out-left { 0% { transform: translateX(0); opacity: 0.95; } 100% { transform: translateX(-200px); opacity: 0; } }
+        @keyframes cloud-out-right { 0% { transform: translateX(0); opacity: 0.95; } 100% { transform: translateX(200px); opacity: 0; } }
+
+        .loading-text {
+            color: #212529;
+            font-size: 24px;
+            font-weight: 800;
+            line-height: 1.4;
+            letter-spacing: -0.8px;
+            text-align: center;
+        }
+
+        .sub-text {
+            color: #adb5bd;
+            font-size: 16px;
+            margin-top: 12px;
+            line-height: 1.6;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-container">
+        <div class="logo-wrapper">
+            <img src="static/logo.png" alt="Logo" class="main-logo">
+            
+            <div class="cloud c1">☁️</div>
+            <div class="cloud c2">☁️</div>
+            <div class="cloud c3">☁️</div>
+            <div class="cloud c4">☁️</div>
+            <div class="cloud c5">☁️</div>
+            <div class="cloud c6">☁️</div>
+            <div class="cloud c7">☁️</div>
+            <div class="cloud c8">☁️</div>
+        </div>
+
+        <div class="loading-text">
+            다 맞춰주니
+        </div>
+        <div class="sub-text">주니를 깨우는 중입니다...<br>잠시만 기다려주세요...</div>
+    </div>
+
+    <script>
+        setTimeout(() => {
+            window.location.replace('/chat/{{ conversation_id }}');
+        }, 3000);
+    </script>
+</body>
+</html>
