@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로그인 - 원자재 시세</title>
+    <style>
+        /* 기본 배경 및 중앙 정렬 (Home 디자인 계승) */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        /* 모바일 뷰 컨테이너 */
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: #f8f9fa;
+            min-height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            position: relative;
+        }
+
+        /* 상단 네비게이션 바 */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 40px;
+            height: 40px;
+        }
+
+        .back-btn {
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #1a1a1a;
+            padding: 8px 8px 8px 0;
+            transition: opacity 0.2s;
+        }
+
+        .back-btn:hover {
+            opacity: 0.5;
+        }
+
+        .nav-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+            flex-grow: 1;
+            text-align: center;
+            margin-right: 28px; /* 뒤로가기 버튼과의 균형을 위한 여백 */
+        }
+
+        /* 로그인 박스 중앙 정렬 */
+        .login-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            text-align: center;
+            padding-bottom: 60px; /* 시각적 중앙을 위해 하단 여백 추가 */
+        }
+
+        .login-logo {
+            width: 72px;
+            height: 72px;
+            background-color: #fff;
+            border-radius: 20px;
+            margin: 0 auto 24px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.05);
+        }
+
+        .login-content h2 {
+            font-size: 28px;
+            font-weight: 800;
+            margin: 0 0 8px 0;
+            color: #1a1a1a;
+        }
+
+        .login-content p {
+            color: #888;
+            font-size: 15px;
+            margin: 0 0 40px 0;
+            line-height: 1.5;
+        }
+
+        /* 버튼 스타일 */
+        .login-btn {
+            width: 100%;
+            padding: 16px;
+            border-radius: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            transition: transform 0.1s ease;
+        }
+
+        .login-btn:active {
+            transform: scale(0.98);
+        }
+
+        .google-btn {
+            background-color: white;
+            color: #3c4043;
+            border: 1px solid #dadce0;
+        }
+
+        .naver-btn {
+            background-color: #03c75a;
+            color: white;
+        }
+
+        /* 푸터 정보 */
+        .footer-info {
+            font-size: 12px;
+            color: #adb5bd;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="nav-bar">
+            <div class="back-btn" onclick="location.href='/'">〈</div>
+            <div class="nav-title">로그인</div>
+        </div>
+
+        <div class="login-content">
+            <div class="login-logo">📈</div>
+            
+            <h2>반가워요!</h2>
+            <p>계정으로 로그인하여<br>원자재 예측 정보를 확인해 보세요.</p>
+            
+            <button onclick="location.href='/login/google'" class="login-btn google-btn">
+                <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" 
+                     style="width: 20px; margin-right: 12px;">
+                Google로 계속하기
+            </button>
+            
+            <button onclick="location.href='/login/naver'" class="login-btn naver-btn">
+                <span style="font-weight: 900; font-size: 1.2em; margin-right: 12px; font-family: 'Arial Black';">N</span>
+                네이버로 계속하기
+            </button>
+
+            <div class="footer-info">
+                로그인 시 서비스 이용약관에 동의하게 됩니다.
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
