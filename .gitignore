@@ -4,3 +4,5 @@ predict/shared/datasets/
 __pycache__/
 
 .env
+
+*.json

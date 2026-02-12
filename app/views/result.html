@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - 원자재 시세</title>
+    <style>
+        /* 기본 레이아웃 시스템 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f1f3f5;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            background-color: #f8f9fa;
+            height: 100vh;
+            padding: 24px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* 상단 네비게이션 바 */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            height: 40px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .back-btn {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            cursor: pointer;
+            position: absolute;
+            left: 0;
+            z-index: 10;
+            padding: 8px;
+        }
+
+        .nav-title {
+            width: 100%;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        /* 중앙 결과 컨텐츠 */
+        .result-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .icon-large {
+            font-size: 64px;
+            margin-bottom: 24px;
+        }
+
+        h2 {
+            font-size: 26px;
+            font-weight: 800;
+            margin: 0 0 12px 0;
+            color: #1a1a1a;
+        }
+
+        p {
+            color: #868e96;
+            font-size: 16px;
+            line-height: 1.6;
+            margin: 0 0 40px 0;
+            max-width: 85%;
+        }
+
+        /* 버튼 공통 스타일 */
+        .btn-action {
+            display: block;
+            width: 100%;
+            max-width: 320px;
+            padding: 18px;
+            border-radius: 18px;
+            font-size: 16px;
+            font-weight: 700;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.2s;
+            box-sizing: border-box;
+        }
+
+        .btn-action:active {
+            transform: scale(0.97);
+        }
+
+        /* 성공 시 (파란색) */
+        .btn-home {
+            background-color: #5c9eff;
+            color: white;
+            box-shadow: 0 4px 12px rgba(92, 158, 255, 0.2);
+        }
+
+        /* 실패/오류 시 (회색 혹은 부드러운 빨강 선택 가능 - 여기서는 일관성을 위해 짙은 회색) */
+        .btn-error {
+            background-color: #495057;
+            color: white;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="nav-bar">
+            <div class="back-btn" onclick="location.href='/'">〈</div>
+            <div class="nav-title">상태 확인</div>
+        </div>
+
+        <div class="result-content">
+            <div class="icon-large">{{ icon }}</div>
+            
+            <h2>{{ title }}</h2>
+            
+            <p>
+                {{ message | safe }}
+            </p>
+            
+            <a href="/" class="btn-action {{ 'btn-home' if is_success else 'btn-error' }}">
+                {{ button_text or '홈으로 이동' }}
+            </a>
+        </div>
+    </div>
+
+</body>
+</html>

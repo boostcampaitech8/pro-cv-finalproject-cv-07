@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ name_ko }} - 원자재 시세</title>
+    <style>
+        /* 글로벌 색상 변수 */
+        :root {
+            --pos-color: #2ecc71; 
+            --neg-color: #e74c3c; 
+            --primary: #5c9eff;
+            --bg-gray: #f1f3f5;
+            --card-white: #ffffff;
+            --star-active: #f1c40f; 
+        }
+
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: var(--bg-gray); 
+            margin: 0; 
+            display: flex; 
+            justify-content: center; 
+            min-height: 100vh; 
+            color: #212529; 
+        }
+
+        .container { 
+            width: 100%; 
+            max-width: 480px; 
+            background-color: #f8f9fa; 
+            min-height: 100vh; 
+            padding: 24px; 
+            box-sizing: border-box; 
+            box-shadow: 0 0 20px rgba(0,0,0,0.05); 
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* --- 네비게이션 (다른 페이지와 통일) --- */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            height: 44px;
+            margin-bottom: 32px;
+            position: relative; /* 자식 요소 배치를 위한 기준 */
+        }
+
+        .back-btn {
+            position: absolute;
+            left: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            cursor: pointer;
+            z-index: 10;
+            padding-right: 10px;
+        }
+
+        .nav-title-group {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-title-text {
+            font-size: 17px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        .icon-circle { 
+            width: 36px; 
+            height: 36px; 
+            border-radius: 12px; 
+            background-color: var(--bg-gray); 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 18px; 
+        }
+
+        .star-btn { 
+            position: absolute;
+            right: 0;
+            font-size: 24px; 
+            color: #adb5bd; 
+            cursor: pointer; 
+            transition: all 0.2s ease;
+            z-index: 10;
+        }
+        .star-btn.active { color: var(--star-active); transform: scale(1.1); }
+
+        /* --- 가격 정보 --- */
+        .price-section { margin-bottom: 24px; display: flex; align-items: baseline; gap: 10px; }
+        .price-main { font-size: 36px; font-weight: 800; margin: 0; letter-spacing: -1px; }
+        .price-sub { font-size: 17px; font-weight: 600; }
+        .positive { color: var(--pos-color); } 
+        .negative { color: var(--neg-color); } 
+
+        /* --- 드롭다운 필터 --- */
+        .filter-row { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; position: relative; }
+        .chip { background-color: var(--primary); color: white; padding: 10px 16px; border-radius: 14px; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .dropdown-menu { position: absolute; top: 48px; left: 0; background: white; border-radius: 14px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); border: 1px solid #eee; width: 140px; display: none; z-index: 1000; overflow: hidden; }
+        .dropdown-menu.show { display: block; }
+        .dropdown-item { padding: 14px 16px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #f8f9fa; }
+        .dropdown-item:hover { background-color: #f1f3f5; color: var(--primary); }
+        .filter-info { font-size: 13px; color: #adb5bd; }
+
+        /* --- 컨텐츠 박스 공통 --- */
+        .placeholder-box { width: 100%; background: var(--card-white); border-radius: 24px; border: 1px solid #edf2f7; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #adb5bd; margin-bottom: 24px; box-shadow: 0 4px 10px rgba(0,0,0,0.02); padding: 20px; }
+        .chart-box { height: 240px; }
+        .report-box { height: 140px; text-align: center; font-weight: 600; }
+
+        .section-title { font-size: 18px; font-weight: 700; margin: 32px 0 16px 4px; display: flex; justify-content: space-between; align-items: center; }
+        .chat-btn { background-color: var(--primary); color: white; padding: 8px 16px; border-radius: 12px; font-size: 12px; border: none; font-weight: 700; cursor: pointer; transition: transform 0.2s; }
+        .chat-btn:active { transform: scale(0.95); }
+
+        /* --- 뉴스 리스트 --- */
+        .news-list { display: flex; flex-direction: column; gap: 12px; }
+        .news-card { background: var(--card-white); border-radius: 20px; padding: 20px; cursor: pointer; transition: all 0.2s; border: 1px solid transparent; box-shadow: 0 4px 10px rgba(0,0,0,0.02); }
+        .news-card:active { transform: scale(0.98); background: #f8f9fa; }
+        .news-title { margin: 0 0 8px; font-size: 16px; font-weight: 700; line-height: 1.5; color: #212529; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .news-meta { font-size: 13px; color: #adb5bd; }
+
+        .custom-badge {
+            position: absolute;
+            background-color: #4A72D4;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: bold;
+            text-align: center;
+            line-height: 1.3;
+            transform: translate(-50%, 0);
+            z-index: 10;
+            display: none;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        /* --- 마크다운 스타일 --- */
+        .markdown-body h1 { font-size: 20px; font-weight: 800; margin: 0 0 12px; color: #1a1a1a; }
+        .markdown-body h2 { font-size: 17px; font-weight: 700; margin: 20px 0 8px; color: #1a1a1a; }
+        .markdown-body h3 { font-size: 15px; font-weight: 700; margin: 16px 0 6px; color: #1a1a1a; }
+        .markdown-body p { margin: 0 0 10px; }
+        .markdown-body ul { padding-left: 20px; margin: 0 0 10px; }
+        .markdown-body li { margin-bottom: 4px; }
+        .markdown-body strong { color: #212529; }
+        .markdown-body blockquote { margin: 12px 0; padding: 10px 16px; background: #f8f9fa; border-left: 3px solid var(--primary); border-radius: 6px; color: #666; font-size: 13px; }
+        .markdown-body blockquote p { margin: 0; }
+
+        /* 리포트 더보기 */
+        .report-collapse {
+            position: relative;
+            max-height: 300px;
+            overflow: hidden;
+            transition: max-height 0.4s ease;
+        }
+
+        .report-collapse.expanded {
+            max-height: none;
+        }
+
+        .report-collapse:not(.expanded)::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 80px;
+            background: linear-gradient(transparent, rgba(255, 255, 255, 0.85) 40%, #ffffff);
+            pointer-events: none;
+        }
+
+        .report-expand-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 8px 0 4px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: var(--primary);
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            gap: 4px;
+            transition: opacity 0.2s;
+        }
+
+        .report-expand-btn:hover {
+            opacity: 0.7;
+        }
+
+        .report-expand-btn .expand-arrow {
+            font-size: 14px;
+            transition: transform 0.3s;
+        }
+
+        .report-expand-btn.expanded .expand-arrow {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav-bar">
+            <div class="back-btn" onclick="location.href='/'">〈</div>
+            <div class="nav-title-group">
+                <div class="icon-circle">{{ emoji }}</div>
+                <span class="nav-title-text">{{ name_ko }}</span>
+            </div>
+            <div id="favBtn" class="star-btn {{ 'active' if is_favorite else '' }}" onclick="toggleFavorite('{{ id }}')">
+                {{ '★' if is_favorite else '☆' }}
+            </div>
+        </div>
+
+        <div class="price-section">
+            <h1 class="price-main">{{ price }}</h1>
+            <div class="price-sub {{ 'positive' if is_positive else 'negative' }}">
+                {{ change_display }}
+            </div>
+        </div>
+
+        <div class="filter-row">
+            <div class="chip" id="dropBtn">
+                <span id="selectedTxt">20일 전</span> <small style="margin-left:4px;">▼</small>
+            </div>
+            <div class="dropdown-menu" id="dropMenu">
+                <div class="dropdown-item" onclick="updateOption('5일 전')">5일 전</div>
+                <div class="dropdown-item" onclick="updateOption('20일 전')">20일 전</div>
+                <div class="dropdown-item" onclick="updateOption('60일 전')">60일 전</div>
+            </div>
+            <div class="filter-info">데이터부터 예측에 사용할게요.</div>
+        </div>
+
+        <div class="chart-box" style="padding: 10px; height: 320px; position: relative; background: #fff;">
+            <canvas id="detailChart" width="100%" height="100%"></canvas>
+    
+            <div class="label-start custom-badge" style="position: absolute; pointer-events: none; display: none;"></div>
+            <div class="label-end custom-badge" style="position: absolute; pointer-events: none; display: none;"></div>
+            <div class="label-combined custom-badge" style="position: absolute; pointer-events: none; display: none;"></div>
+        </div>
+
+        <div class="section-title">
+            AI Report
+            <button class="chat-btn" onclick="location.href='/chat-loading?product_id={{ id }}'">CHAT ↗</button>
+        </div>
+        {% if report_content %}
+        <div class="placeholder-box report-box" style="height: auto; align-items: flex-start; text-align: left;">
+            <div class="report-collapse" id="reportCollapse">
+                <div id="reportMarkdown" class="markdown-body" style="width: 100%; font-size: 14px; line-height: 1.7; color: #333;"></div>
+            </div>
+            <button class="report-expand-btn" id="reportExpandBtn" onclick="toggleReport()">
+                더보기 <span class="expand-arrow">∨</span>
+            </button>
+        </div>
+        {% else %}
+        <div class="placeholder-box report-box">
+            <div style="font-size: 28px; margin-bottom: 8px;">🤖</div>
+            <div>분석 리포트를 생성하고 있습니다.</div>
+        </div>
+        {% endif %}
+
+        <div class="section-title">관련 뉴스</div>
+        <div class="news-list">
+            {% for news in news_list %}
+            <div class="news-card" onclick="window.open('{{ news.url }}', '_blank')">
+                <div class="news-content">
+                    <div class="news-title">{{ news.title }}</div>
+                    <div class="news-meta">{{ news.site }} · {{ news.time }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <script>
+        // 드롭다운 로직
+        const btn = document.getElementById('dropBtn');
+        const menu = document.getElementById('dropMenu');
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            menu.classList.toggle('show');
+        });
+
+        window.addEventListener('click', () => menu.classList.remove('show'));
+
+        // 즐겨찾기 로직
+        async function toggleFavorite(productId) {
+            const favBtn = document.getElementById('favBtn');
+            const isCurrentlyActive = favBtn.classList.contains('active');
+            const nextState = !isCurrentlyActive;
+            
+            // UI 선반응
+            favBtn.classList.toggle('active');
+            favBtn.innerText = nextState ? '★' : '☆';
+
+            try {
+                const response = await fetch('/api/favorite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        product_id: parseInt(productId), 
+                        is_favorite: nextState 
+                    })
+                });
+                if (!response.ok) throw new Error('서버 처리 실패');
+            } catch (error) {
+                console.error("즐겨찾기 실패:", error);
+                // 실패 시 복구
+                favBtn.classList.toggle('active');
+                favBtn.innerText = isCurrentlyActive ? '★' : '☆';
+                alert("상태 변경에 실패했습니다.");
+            }
+        }
+
+        let currentChart = null;
+        let allPredictions = {}; 
+        let commonLabels = [];
+        let actualPrices = [];
+        let baseDate = "";
+
+        const WINDOWS = [5, 20, 60];
+        const COLORS = {
+            5: { main: '#FF6B6B', light: 'rgba(255, 107, 107, 0.3)' },  
+            20: { main: '#FFD700', light: 'rgba(255, 215, 0, 0.3)' }, 
+            60: { main: '#4ECDC4', light: 'rgba(78, 205, 196, 0.3)' }  
+        };
+
+        document.addEventListener('DOMContentLoaded', async function() {
+            Chart.register(window['chartjs-plugin-annotation']);
+            await initAllData();
+            renderCompleteChart(20);
+
+            // 마크다운 리포트 렌더링
+            const reportEl = document.getElementById('reportMarkdown');
+            if (reportEl) {
+                const raw = {{ report_content | tojson }};
+                reportEl.innerHTML = marked.parse(raw || '');
+
+                // 리포트가 300px 이하면 더보기 버튼 숨기기
+                const reportCollapse = document.getElementById('reportCollapse');
+                const reportExpandBtn = document.getElementById('reportExpandBtn');
+                if (reportCollapse && reportExpandBtn) {
+                    if (reportCollapse.scrollHeight <= 300) {
+                        reportCollapse.classList.add('expanded');
+                        reportExpandBtn.style.display = 'none';
+                    }
+                }
+            }
+        });
+
+        async function initAllData() {
+            const productId = "{{ id }}";
+            try {
+                const promises = WINDOWS.map(size => 
+                    fetch(`/api/prediction/${productId}?window_size=${size}`).then(res => res.json())
+                );
+                const results = await Promise.all(promises);
+                
+                results.forEach((result, idx) => {
+                    const size = WINDOWS[idx];
+                    const data = result.data;
+                    
+                    if (idx === 0) {
+                        commonLabels = data.map(item => item.date);
+                        baseDate = result.base_date;
+                        const splitIdx = data.length - 21; 
+                        actualPrices = data.map((item, i) => i <= splitIdx ? item.close : null);
+                    }
+                    const splitIdx = data.length - 21;
+                    allPredictions[size] = data.map((item, i) => i >= splitIdx ? item.close : null);
+                });
+            } catch (e) {
+                console.error("데이터 로딩 실패:", e);
+            }
+        }
+
+        async function updateOption(val) {
+            document.getElementById('selectedTxt').innerText = val;
+            menu.classList.remove('show');
+            const size = parseInt(val.replace(/[^0-9]/g, ""));
+            renderCompleteChart(size);
+        }
+
+        function renderCompleteChart(activeSize) {
+            const ctx = document.getElementById('detailChart').getContext('2d');
+            if (currentChart) currentChart.destroy();
+
+            // 부모 컨테이너가 라벨을 자르지 않도록 설정
+            ctx.canvas.parentElement.style.overflow = 'visible';
+
+            const splitIdx = commonLabels.length - 21;
+
+            const datasets = [
+                {
+                    label: '실제 종가',
+                    data: actualPrices,
+                    borderColor: '#5c9eff',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3,
+                    fill: false,
+                    order: 1
+                }
+            ];
+
+            // 모든 WINDOWS(5, 20, 60)를 루프 돌며 차트에 추가
+            WINDOWS.forEach(size => {
+                const isActive = (size === activeSize);
+                datasets.push({
+                    // 강조된 선은 "예측 종가(N일)", 나머지는 "N일 예측"으로 라벨링
+                    label: isActive ? `예측 종가(${size}일)` : `${size}일 예측`,
+                    data: allPredictions[size],
+                    // 선택된 것만 선명하게, 나머지는 투명도 0.45 적용
+                    borderColor: isActive ? COLORS[size].main : COLORS[size].light,
+                    borderWidth: isActive ? 2.5 : 1.5,
+                    borderDash: isActive ? [] : [4, 4], // 선택 안된건 점선 처리
+                    pointRadius: 0,
+                    tension: 0.3,
+                    fill: false,
+                    order: isActive ? 0 : 2 // 강조된 선을 가장 앞으로
+                });
+            });
+
+            currentChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: commonLabels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: {
+                            bottom: 50, // 라벨이 아래로 삐져나가지 않게 차트 하단 여백 확보
+                            top: 10,
+                            left: 10,
+                            right: 10
+                        }
+                    },
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            enabled: true,
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            titleColor: '#333',
+                            bodyColor: '#444',
+                            borderColor: '#ddd',
+                            borderWidth: 1,
+                            padding: 12,
+                            filter: function(tooltipItem) {
+                                const label = tooltipItem.dataset.label;
+                                const activePredictLabel = `예측 종가(${activeSize}일)`;
+                                const hasActualPrice = actualPrices[tooltipItem.dataIndex] !== null;
+                                if (hasActualPrice) {
+                                    return label === '실제 종가';
+                                } else {
+                                    return label === activePredictLabel;
+                                }
+                            },
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${new Intl.NumberFormat('ko-KR').format(context.parsed.y)}원`;
+                                }
+                            }
+                        },
+                        annotation: {
+                            annotations: {
+                                windowBox: {
+                                    type: 'box',
+                                    xMin: Math.max(0, splitIdx - activeSize + 1),
+                                    xMax: splitIdx,
+                                    backgroundColor: 'rgba(92, 158, 255, 0.06)',
+                                    borderColor: 'rgba(92, 158, 255, 0.2)',
+                                    borderWidth: 1,
+                                    drawTime: 'beforeDatasetsDraw'
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            position: 'right',
+                            grid: { color: '#f8f8f8' },
+                            ticks: { 
+                                font: { size: 10 },
+                                callback: (val) => val.toLocaleString()
+                            }
+                        }
+                    },
+                    animation: {
+                        onProgress: (anim) => updateLabels(anim.chart, splitIdx, baseDate, activeSize, commonLabels),
+                        onComplete: (anim) => updateLabels(anim.chart, splitIdx, baseDate, activeSize, commonLabels)
+                    }
+                }
+            });
+        }
+
+        function toggleReport() {
+            const collapse = document.getElementById('reportCollapse');
+            const btn = document.getElementById('reportExpandBtn');
+            if (!collapse || !btn) return;
+            const isExpanded = collapse.classList.toggle('expanded');
+            btn.classList.toggle('expanded', isExpanded);
+            btn.innerHTML = isExpanded
+                ? '접기 <span class="expand-arrow">∨</span>'
+                : '더보기 <span class="expand-arrow">∨</span>';
+        }
+
+        function updateLabels(chart, splitIdx, baseDate, windowSize, labels) {
+            const xAxis = chart.scales.x;
+            const { bottom, left, right } = chart.chartArea;
+            const parent = chart.canvas.parentElement;
+            
+            const lStart = parent.querySelector('.label-start');
+            const lEnd = parent.querySelector('.label-end');
+            const lComb = parent.querySelector('.label-combined');
+
+            const xStart = xAxis.getPixelForValue(Math.max(0, splitIdx - windowSize + 1));
+            const xEnd = xAxis.getPixelForValue(splitIdx);
+            const dist = Math.abs(xEnd - xStart);
+
+            // 삐져나감 방지: 좌표 제한 (left ~ right 범위 내로 고정)
+            const safeXStart = Math.max(left + 30, Math.min(xStart, right - 30));
+            const safeXEnd = Math.max(left + 30, Math.min(xEnd, right - 30));
+
+            if (dist < 110) {
+                lStart.style.display = 'none'; lEnd.style.display = 'none';
+                lComb.style.display = 'block';
+                lComb.innerHTML = `<b>${windowSize}일 학습 데이터</b><br>${baseDate}`;
+                lComb.style.left = ((xStart + dist/2) + 12) + 'px';
+                lComb.style.top = (bottom + 15) + 'px';
+            } else {
+                lComb.style.display = 'none';
+                lStart.style.display = 'block';
+                lStart.innerHTML = `학습 시작<br>${labels[Math.max(0, splitIdx - windowSize + 1)]}`;
+                lStart.style.left = (safeXStart + 12) + 'px'; // 안전 좌표 적용
+                lStart.style.top = (bottom + 15) + 'px';
+
+                lEnd.style.display = 'block';
+                lEnd.innerHTML = `학습 종료<br>${baseDate}`;
+                lEnd.style.left = (safeXEnd + 12) + 'px'; // 안전 좌표 적용
+                lEnd.style.top = (bottom + 15) + 'px';
+            }
+        }
+    </script>
+</body>
+</html>
