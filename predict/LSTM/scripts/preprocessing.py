@@ -1,7 +1,7 @@
-from src.configs.train_config import TrainConfig
-from src.utils.set_seed import set_seed
-from src.data.feature_engineering import *
-from src.data.preprocessing import filtering_news, add_news_sentiment, add_news_timeframe
+from predict.LSTM.src.configs.train_config import TrainConfig
+from predict.LSTM.src.utils.set_seed import set_seed
+from predict.LSTM.src.data.feature_engineering import *
+from predict.LSTM.src.data.preprocessing import filtering_news, add_news_sentiment, add_news_timeframe
 
 import os
 import csv
