@@ -26,8 +26,9 @@ _load_env()
 PROJECT_ROOT = os.getenv("PROJECT_ROOT", "/data/ephemeral/home/pro-cv-finalproject-cv-07")
 PYTHON_BIN = os.getenv("AIRFLOW_PYTHON_BIN", "/data/ephemeral/home/TFT/bin/python")
 
-SPLIT_DIR = f"{PROJECT_ROOT}/python/src/datasets/bq_splits"
-DATA_ROOT = f"{PROJECT_ROOT}/python/src/datasets/local_bq_like"
+PREDICT_ROOT = f"{PROJECT_ROOT}/predict"
+SPLIT_DIR = f"{PREDICT_ROOT}/shared/src/datasets/bq_splits"
+DATA_ROOT = f"{PREDICT_ROOT}/shared/src/datasets/local_bq_like"
 
 COMMODITIES = os.getenv("COMMODITIES", "corn,wheat,soybean,gold,silver,copper").split(",")
 WINDOW_SIZES = os.getenv("WINDOW_SIZES", "5 20 60")
@@ -67,7 +68,7 @@ with DAG(
 ) as dag:
     wait_bq_split = ExternalTaskSensor(
         task_id="wait_bq_split",
-        external_dag_id="bq-split",
+        external_dag_id="price-BQ-split",
         external_task_id="build_bq_split",
         allowed_states=["success"],
         failed_states=["failed", "skipped"],
@@ -80,17 +81,12 @@ with DAG(
     tft_train = BashOperator(
         task_id="train_tft",
         bash_command=(
-            f"cd {PROJECT_ROOT}/python && "
+            f"cd {PREDICT_ROOT} && "
             f"for c in {COMMODITY_ARGS}; do "
-            f"{PYTHON_BIN} scripts/run_tft_batch.py "
-            f"--data_source bigquery "
-            f"--split_file {SPLIT_DIR}/${{c}}_split.json "
+            f"{PYTHON_BIN} TFT/scripts/train_tft.py "
             f"--target_commodity ${{c}} "
             f"--seq_lengths {WINDOW_SIZES} "
-            f"--fold 0 "
-            f"--do_infer "
-            f"--checkpoint_root \"src/outputs/checkpoints/{{commodity}}_{{date}}_tft\" "
-            f"--prediction_root \"src/outputs/predictions/{{commodity}}_{{date}}_tft\"; "
+            f"--fold 0; "
             f"done"
         ),
     )
@@ -98,17 +94,12 @@ with DAG(
     deepar_train = BashOperator(
         task_id="train_deepar",
         bash_command=(
-            f"cd {PROJECT_ROOT}/python && "
+            f"cd {PREDICT_ROOT} && "
             f"for c in {COMMODITY_ARGS}; do "
-            f"{PYTHON_BIN} scripts/run_deepar_batch.py "
-            f"--data_source bigquery "
-            f"--split_file {SPLIT_DIR}/${{c}}_split.json "
+            f"{PYTHON_BIN} DeepAR/scripts/train_deepar.py "
             f"--target_commodity ${{c}} "
             f"--seq_lengths {WINDOW_SIZES} "
-            f"--fold 0 "
-            f"--no-do_test "
-            f"--checkpoint_root \"src/outputs/checkpoints/{{commodity}}_{{date}}_deepar\" "
-            f"--prediction_root \"src/outputs/predictions/{{commodity}}_{{date}}_deepar\"; "
+            f"--fold 0; "
             f"done"
         ),
     )
@@ -116,15 +107,12 @@ with DAG(
     cnn_train = BashOperator(
         task_id="train_cnn",
         bash_command=(
-            f"cd {PROJECT_ROOT}/python && "
+            f"cd {PREDICT_ROOT} && "
             f"for c in {COMMODITY_ARGS}; do "
-            f"{PYTHON_BIN} scripts/run_cnn_batch.py "
-            f"--data_dir {DATA_ROOT}/${{c}} "
-            f"--split_file {SPLIT_DIR}/${{c}}_split.json "
+            f"{PYTHON_BIN} CNN/scripts/train_cnn.py "
             f"--target_commodity ${{c}} "
-            f"--window_sizes {WINDOW_SIZES} "
-            f"--folds 0 "
-            f"--output_tag \"\"; "
+            f"--seq_lengths {WINDOW_SIZES} "
+            f"--folds 0; "
             f"done"
         ),
     )

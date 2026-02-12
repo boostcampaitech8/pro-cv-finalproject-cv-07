@@ -23,6 +23,7 @@ def _load_env() -> None:
 _load_env()
 
 PROJECT_ROOT = os.getenv("PROJECT_ROOT", "/data/ephemeral/home/pro-cv-finalproject-cv-07")
+PREDICT_ROOT = f"{PROJECT_ROOT}/predict"
 PYTHON_BIN = os.getenv("AIRFLOW_PYTHON_BIN", "/data/ephemeral/home/airflow/bin/python")
 
 COMMODITIES = os.getenv("COMMODITIES", "corn,wheat,soybean,gold,silver,copper").split(",")
@@ -84,25 +85,25 @@ with DAG(
     publish_outputs = BashOperator(
         task_id="publish_outputs",
         bash_command=(
-            f"cd {PROJECT_ROOT}/python && "
+            f"cd {PREDICT_ROOT} && "
             f"TRUNC=1; TRUNC_SQL=1; "
             f"for c in {COMMODITY_ARGS}; do "
-            f"TFT_DIR=$(ls -td src/outputs/predictions/${{c}}_*_tft_eval 2>/dev/null | head -1); "
-            f"DEE_DIR=$(ls -td src/outputs/predictions/${{c}}_*_deepar_eval 2>/dev/null | head -1); "
-            f"CNN_DIR=$(ls -td src/outputs/predictions/${{c}}_*_cnn_eval 2>/dev/null | head -1); "
+            f"TFT_DIR=$(ls -td outputs/predictions/*_${{c}}_tft 2>/dev/null | head -1); "
+            f"DEE_DIR=$(ls -td outputs/predictions/*_${{c}}_deepar 2>/dev/null | head -1); "
+            f"CNN_DIR=$(ls -td outputs/predictions/*_${{c}}_cnn 2>/dev/null | head -1); "
             f"if [ -z \"$TFT_DIR\" ] || [ -z \"$DEE_DIR\" ] || [ -z \"$CNN_DIR\" ]; then "
             f"echo \"Missing predictions for ${{c}}\"; continue; fi; "
             f"for w in {WINDOW_ARGS}; do "
             f"EXTRA=''; if [ \"$TRUNC\" = 1 ]; then EXTRA='--truncate_table'; TRUNC=0; fi; "
             f"EXTRA_SQL=''; if [ \"$TRUNC_SQL\" = 1 ]; then EXTRA_SQL='--truncate_sql'; TRUNC_SQL=0; fi; "
-            f"{PYTHON_BIN} scripts/publish_outputs.py "
+            f"{PYTHON_BIN} shared/scripts/utils/publish_outputs.py "
             f"--symbol ${{c}} "
             f"--window ${{w}} "
             f"--tft_predictions $TFT_DIR/tft_predictions.csv "
             f"--deepar_predictions $DEE_DIR/deepar_predictions.csv "
             f"--cnn_predictions $CNN_DIR/cnn_predictions.csv "
-            f"--data_dir src/datasets/local_bq_like/${{c}} "
-            f"--output_dir src/outputs/predictions/${{c}}_bundle/w${{w}} "
+            f"--data_dir shared/src/datasets/local_bq_like/${{c}} "
+            f"--output_dir outputs/predictions/${{c}}_bundle/w${{w}} "
             f"--gcs_bucket {GCS_BUCKET} "
             f"--gcs_prefix \"{GCS_PREFIX}\" "
             f"--gcs_name_pattern \"{GCS_NAME_PATTERN}\" "
