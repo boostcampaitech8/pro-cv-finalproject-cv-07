@@ -1,3 +1,5 @@
+![Title](assets/title.png)
+
 # 프로젝트 소개
 
 ### **문제 정의**
@@ -32,7 +34,7 @@
 
 # 서비스 아키텍쳐
 
-![image.png](attachment:02ca5ec1-bd66-4c58-98d1-e479f5dcf653:image.png)
+![Architecture](assets/architecture.png)
 
 ### 1. 데이터 수집 및 전처리 (Data Ingestion)
 
@@ -71,3 +73,48 @@
     - **심화 질문:** **Neo4j**(Graph DB)를 조회하여 데이터 간의 복잡한 관계를 파악한 후 더 깊이 있는 답변을 생성합니다.
         - **Multi-hop Expansion** : 코사인 유사도와 거리 가중치를 결합
         - MMR 알고리즘, 발행일 가중치 반영
+     
+
+
+# 팀(부캠별의 커비) 소개
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/tenaan">
+        <img src="assets/member3.png" width="100px;" alt="member3"/>
+        <br />
+        <sub><b>안태현</b></sub>
+      </a>
+      <br />
+      <a href="https://github.com/tenaan" title="Code"></a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/jjeongbin0826">
+        <img src="assets/member1.png" width="100px;" alt="member1"/>
+        <br />
+        <sub><b>최정빈</b></sub>
+      </a>
+      <br />
+      <a href="https://github.com/jjeongbin0826" title="Code"></a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/chocobanana20">
+        <img src="assets/member4.png" width="100px;" alt="member4"/>
+        <br />
+        <sub><b>이승현</b></sub>
+      </a>
+      <br />
+      <a href="https://github.com/chocobanana20" title="Code"></a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/wooqi00">
+        <img src="assets/member2.png" width="100px;" alt="member2"/>
+        <br />
+        <sub><b>윤종욱</b></sub>
+      </a>
+      <br />
+      <a href="https://github.com/wooqi00" title="Code"></a>
+    </td>
+  </tr>
+</table>
