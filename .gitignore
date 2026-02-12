@@ -1,4 +1,4 @@
-python/shared/datasets/
+predict/shared/datasets/
 *outputs/
 
 __pycache__/
